@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": false, "module": "Node16", "moduleResolution": "Node16", "target": "es2020", "outDir": "../../.iwesr-test-build", "rootDir": "." },
+  "include": ["types.ts", "utils/**/*.ts", "palettes/**/*.ts", "engine/**/*.ts", "__tests__/**/*.ts"]
+}
