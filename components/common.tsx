@@ -1,7 +1,5 @@
 import type { PropsWithChildren } from 'react';
 import { Pressable, Text, View, type PressableProps } from 'react-native';
-import type { WeatherIconName } from '@/types/weather';
-import { WeatherIcon } from '@/components/weather-icon';
 
 export const cardShadow = '0 4px 20px rgba(0, 0, 0, 0.02)';
 export const subtleShadow = '0 1px 3px rgba(0, 0, 0, 0.06)';
@@ -24,16 +22,14 @@ export function SectionHeading({ children }: PropsWithChildren) {
 }
 
 interface StatCardProps extends PressableProps {
-  icon: WeatherIconName;
   label: string;
   value: string;
   status: string;
-  iconColor: string;
   badgeBg: string;
   badgeText: string;
 }
 
-export function StatCard({ icon, label, value, status, iconColor, badgeBg, badgeText, ...props }: StatCardProps) {
+export function StatCard({ label, value, status, badgeBg, badgeText, ...props }: StatCardProps) {
   return (
     <Pressable
       {...props}
@@ -51,12 +47,11 @@ export function StatCard({ icon, label, value, status, iconColor, badgeBg, badge
         transform: [{ translateY: pressed ? -4 : 0 }],
       })}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        <WeatherIcon name={icon} size={12} color={iconColor} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
         <Text style={{ color: '#9CA3AF', fontSize: 10, fontWeight: '500' }}>{label}</Text>
       </View>
       <Text style={{ color: '#374151', fontSize: 15, fontWeight: '600', marginBottom: 4, fontVariant: ['tabular-nums'] }}>{value}</Text>
-      <View style={{ paddingHorizontal: 10, paddingVertical: 2, borderRadius: 999, backgroundColor: badgeBg }}>
+      <View style={{ paddingHorizontal: 10, paddingVertical: 2, borderRadius: 999, backgroundColor: badgeBg, borderWidth: 1, borderColor: badgeText }}>
         <Text style={{ color: badgeText, fontSize: 9, fontWeight: '500' }}>{status}</Text>
       </View>
     </Pressable>

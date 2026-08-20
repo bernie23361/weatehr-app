@@ -57,6 +57,37 @@ const fetchCwa = async (datasetId,apiKey,params={}) => {
 const settledValue = result => result.status==='fulfilled'?result.value:undefined;
 const settledWarning = (datasetId,result) => result.status==='rejected'?`${datasetId}: ${result.reason instanceof Error?result.reason.message:String(result.reason)}`:undefined;
 
+const stationCounty = station => String(station?.GeoInfo?.CountyName??'');
+const stationTown = station => String(station?.GeoInfo?.TownName??'');
+const stationLatitude = station => finiteNumber(station?.GeoInfo?.Coordinates?.[0]?.StationLatitude,undefined);
+const stationLongitude = station => finiteNumber(station?.GeoInfo?.Coordinates?.[0]?.StationLongitude,undefined);
+const stationObservedAt = station => station?.ObsTime?.DateTime??null;
+const stationWeatherText = station => String(station?.WeatherElement?.Now?.Weather??station?.WeatherElement?.Weather??'');
+
+const normalizeObservationStation = station => {
+  const temperature=stationTemperature(station);
+  if(temperature===undefined) return undefined;
+  const element=station?.WeatherElement??{};
+  return {
+    stationId:String(station?.StationId??''),
+    stationName:String(station?.StationName??''),
+    county:normalizeCity(stationCounty(station)),
+    town:stationTown(station),
+    latitude:stationLatitude(station),
+    longitude:stationLongitude(station),
+    altitude:finiteNumber(station?.StationAltitude,null),
+    observedAt:stationObservedAt(station),
+    temperature,
+    humidity:finiteNumber(element.RelativeHumidity,null),
+    windSpeedMs:finiteNumber(element.WindSpeed,null),
+    gustSpeedMs:finiteNumber(element.GustSpeed,null),
+    windDirectionDeg:finiteNumber(element.WindDirection,null),
+    precipitationIntensity:finiteNumber(element.Now?.Precipitation,null),
+    visibilityKm:finiteNumber(element.Visibility,null),
+    weather:stationWeatherText(station),
+  };
+};
+
 const fetchMoenvAirQuality = async apiKey => {
   const url=new URL(MOENV_AQI_URL);
   url.searchParams.set('api_key',apiKey);
@@ -174,7 +205,7 @@ const resolveSunTimes = (data,today,city) => {
 
 const apparentTemperature = (temperature,humidity,windSpeed) => {
   const vapor=(humidity/100)*6.105*Math.exp((17.27*temperature)/(237.7+temperature));
-  return Math.round(temperature+.33*vapor-.7*windSpeed-4);
+  return Math.round(1.04*temperature+.2*vapor-.65*windSpeed-2.7);
 };
 
 const buildHourly = (location,current,daylight,sunrise,sunset) => {
@@ -294,12 +325,52 @@ const handleAirQuality = async (request,env,ctx) => {
   }
 };
 
+const handleObservation = async (request,env,ctx) => {
+  if(!env.CWA_API_KEY) return jsonResponse({error:{code:'CONFIGURATION_ERROR',message:'Worker 尚未設定 CWA_API_KEY Secret'}},500);
+  const requestUrl=new URL(request.url);
+  const county=normalizeCity(requestUrl.searchParams.get('county')??'');
+  const cacheUrl=new URL('/weather/observation',requestUrl.origin);
+  if(county) cacheUrl.searchParams.set('county',county);
+  const cacheKey=new Request(cacheUrl,{method:'GET'});
+  const cached=await caches.default.match(cacheKey);
+  if(cached){const response=new Response(cached.body,cached);response.headers.set('X-Worker-Cache','HIT');return response;}
+
+  try{
+    const upstream=await Promise.allSettled([
+      fetchCwa('O-A0003-001',env.CWA_API_KEY),
+      fetchCwa('O-A0001-001',env.CWA_API_KEY),
+    ]);
+    const [automaticResult,bureauResult]=upstream;
+    const automatic=settledValue(automaticResult);
+    const bureau=settledValue(bureauResult);
+    const warnings=[settledWarning('O-A0003-001',automaticResult),settledWarning('O-A0001-001',bureauResult)].filter(Boolean);
+    const stations=[...stationsFrom(automatic),...stationsFrom(bureau)];
+    const normalized=stations.map(normalizeObservationStation).filter(Boolean);
+    if(!normalized.length) throw new Error(warnings.join(' | ')||'兩個觀測資料來源皆無可用測站');
+    const unique=normalized.filter((station,index,array)=>array.findIndex(item=>item.stationId===station.stationId)===index);
+    const filtered=county?unique.filter(station=>station.county===county):unique;
+    const payload={
+      ok:true,
+      count:filtered.length,
+      stations:filtered,
+      metadata:{source:'中央氣象署開放資料',datasetIds:['O-A0003-001','O-A0001-001'],cacheTtlSeconds:CACHE_TTL_SECONDS,warnings},
+    };
+    const response=jsonResponse(payload,200,{'Cache-Control':`public, max-age=${CACHE_TTL_SECONDS}`,'X-Worker-Cache':'MISS'});
+    ctx.waitUntil(caches.default.put(cacheKey,response.clone()));
+    return response;
+  }catch(error){
+    console.error(JSON.stringify({event:'cwa_observation_error',county,message:error instanceof Error?error.message:String(error)}));
+    return jsonResponse({error:{code:'UPSTREAM_ERROR',message:'目前無法取得中央氣象署測站觀測資料，請稍後再試',details:error instanceof Error?error.message:String(error)}},502);
+  }
+};
+
 export default {
   async fetch(request,env,ctx){
     if(request.method==='OPTIONS') return new Response(null,{status:204,headers:CORS_HEADERS});
     if(request.method!=='GET') return jsonResponse({error:{code:'METHOD_NOT_ALLOWED',message:'僅支援 GET'}},405,{Allow:'GET, OPTIONS'});
     const {pathname}=new URL(request.url);
     if(pathname==='/'||pathname==='/weather/current') return handleCurrentWeather(request,env,ctx);
+    if(pathname==='/weather/observation') return handleObservation(request,env,ctx);
     if(pathname==='/air-quality') return handleAirQuality(request,env,ctx);
     if(pathname==='/health') return jsonResponse({ok:true,service:'cwa-weather-worker'});
     return jsonResponse({error:{code:'NOT_FOUND',message:'找不到此 API 路由'}},404);

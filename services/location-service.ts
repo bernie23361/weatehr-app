@@ -1,4 +1,4 @@
-import * as Location from 'expo-location';
+import { Platform } from 'react-native';
 import { findTaiwanLocation } from '@/data/taiwan-locations';
 import type { TaiwanLocation } from '@/types/weather';
 import type { Coordinates } from '@/services/weather-api';
@@ -16,7 +16,21 @@ export interface LocatedTaiwanLocation {
   coordinates: Coordinates;
 }
 
-export async function getCurrentTaiwanLocation(): Promise<LocatedTaiwanLocation> {
+export async function getCurrentTaiwanLocation(webFallback?: TaiwanLocation): Promise<LocatedTaiwanLocation> {
+  if (Platform.OS === 'web') {
+    if (!webFallback || typeof navigator === 'undefined' || !navigator.geolocation) throw new LocationServiceError('unavailable');
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 10_000 });
+    }).catch((error: GeolocationPositionError) => {
+      throw new LocationServiceError(error.code === error.PERMISSION_DENIED ? 'permission-denied' : 'unavailable');
+    });
+    return {
+      location: webFallback,
+      coordinates: { latitude: position.coords.latitude, longitude: position.coords.longitude },
+    };
+  }
+
+  const Location = await import('expo-location');
   if (!(await Location.hasServicesEnabledAsync())) throw new LocationServiceError('services-disabled');
 
   const permission = await Location.requestForegroundPermissionsAsync();

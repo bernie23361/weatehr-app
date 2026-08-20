@@ -1,21 +1,21 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import type * as ExpoNotifications from 'expo-notifications';
 
 export type NotificationCategoryType = 'general' | 'alert';
-
-export interface NotificationPayload {
-  type: NotificationCategoryType;
-  title: string;
-  body: string;
-  data?: Record<string, unknown>;
-}
 
 export const GENERAL_CHANNEL_ID = 'weather-general';
 export const ALERT_CHANNEL_ID = 'weather-alert';
 export const GENERAL_CATEGORY_ID = 'weather-general';
 export const ALERT_CATEGORY_ID = 'weather-alert';
 
-export function configureNotificationHandler(): void {
+async function getNativeNotifications() {
+  if (Platform.OS === 'web') return undefined;
+  return import('expo-notifications');
+}
+
+export async function configureNotificationHandler(): Promise<void> {
+  const Notifications = await getNativeNotifications();
+  if (!Notifications) return;
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -27,6 +27,9 @@ export function configureNotificationHandler(): void {
 }
 
 export async function ensureNotificationPermissions(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  const Notifications = await getNativeNotifications();
+  if (!Notifications) return false;
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(GENERAL_CHANNEL_ID, {
       name: '一般通知',
@@ -58,42 +61,30 @@ export async function ensureNotificationPermissions(): Promise<boolean> {
   return requested.granted || (Platform.OS === 'ios' && requested.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL);
 }
 
-export async function presentLocalNotification(payload: NotificationPayload): Promise<string | null> {
-  const granted = await ensureNotificationPermissions();
-  if (!granted) return null;
-  const content: Notifications.NotificationContentInput = {
-    title: payload.title,
-    body: payload.body,
-    sound: 'default',
-    data: { type: payload.type, ...payload.data },
-  };
-  if (Platform.OS === 'ios') {
-    content.categoryIdentifier = payload.type === 'alert' ? ALERT_CATEGORY_ID : GENERAL_CATEGORY_ID;
-  }
-  const trigger: Notifications.NotificationTriggerInput = Platform.OS === 'android'
-    ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, channelId: payload.type === 'alert' ? ALERT_CHANNEL_ID : GENERAL_CHANNEL_ID, repeats: false }
-    : null;
-  return Notifications.scheduleNotificationAsync({ content, trigger });
-}
+export function subscribeToAlertResponses(onAlert: (alert: { title: string; content: string }) => void): () => void {
+  if (Platform.OS === 'web') return () => undefined;
 
-export async function scheduleLocalNotification(payload: NotificationPayload, seconds: number): Promise<string | null> {
-  const granted = await ensureNotificationPermissions();
-  if (!granted) return null;
-  const content: Notifications.NotificationContentInput = {
-    title: payload.title,
-    body: payload.body,
-    sound: 'default',
-    data: { type: payload.type, ...payload.data },
+  let disposed = false;
+  let subscription: ExpoNotifications.Subscription | undefined;
+  const openAlertFromResponse = (response: ExpoNotifications.NotificationResponse) => {
+    const { data, title, body } = response.notification.request.content;
+    if (notificationTypeFromData(data as Record<string, unknown>) === 'alert' && title && body) {
+      onAlert({ title, content: body });
+    }
   };
-  if (Platform.OS === 'ios') {
-    content.categoryIdentifier = payload.type === 'alert' ? ALERT_CATEGORY_ID : GENERAL_CATEGORY_ID;
-  }
-  const trigger: Notifications.NotificationTriggerInput = {
-    type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-    seconds,
-    ...(Platform.OS === 'android' ? { channelId: payload.type === 'alert' ? ALERT_CHANNEL_ID : GENERAL_CHANNEL_ID, repeats: false } : {}),
+
+  void getNativeNotifications().then((Notifications) => {
+    if (!Notifications || disposed) return;
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response && !disposed) openAlertFromResponse(response);
+    });
+    subscription = Notifications.addNotificationResponseReceivedListener(openAlertFromResponse);
+  });
+
+  return () => {
+    disposed = true;
+    subscription?.remove();
   };
-  return Notifications.scheduleNotificationAsync({ content, trigger });
 }
 
 export function notificationTypeFromData(data: Record<string, unknown> | undefined): NotificationCategoryType | undefined {

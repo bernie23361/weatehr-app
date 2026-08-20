@@ -10,6 +10,7 @@
 
 - `GET /health`：健康檢查。
 - `GET /weather/current?city=臺中市&district=北區`：即時觀測、日出日沒與未來六小時。
+- `GET /weather/observation?county=臺中市`：全台測站即時觀測清單（可選 `county` 篩選）。
 - `OPTIONS`：Expo Web／瀏覽器預檢請求。
 
 成功回應快取五分鐘。錯誤回應不快取，也不會向客戶端暴露中央氣象署或 Secret 的詳細錯誤。

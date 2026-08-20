@@ -1,4 +1,5 @@
 import type { AppData, HourlyForecast, LifeSuggestion, SrdiLevel, TaiwanLocation, WeeklyForecast } from '@/types/weather';
+import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
 
 export interface Coordinates {
   latitude: number;
@@ -20,8 +21,27 @@ export interface CurrentWeatherObservation extends Coordinates {
   sunset?: string;
 }
 
+export interface ObservationStation {
+  stationId: string;
+  stationName: string;
+  county: string;
+  town: string;
+  latitude: number | null;
+  longitude: number | null;
+  altitude: number | null;
+  observedAt: string | null;
+  temperature: number | null;
+  humidity: number | null;
+  windSpeedMs: number | null;
+  gustSpeedMs: number | null;
+  windDirectionDeg: number | null;
+  precipitationIntensity: number | null;
+  visibilityKm: number | null;
+  weather: string;
+}
+
 export interface WeatherApiService {
-  getCurrentWeather: (coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>) => Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation }>;
+  getCurrentWeather: (coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>) => Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }>;
   geocodeLocation: (location: TaiwanLocation) => Promise<Coordinates>;
   getAQI: (coordinates?: Coordinates) => Promise<Partial<AppData['aqi']> | undefined>;
   getSRDI: (coordinates?: Coordinates) => Promise<{ level: SrdiLevel } | undefined>;
@@ -30,6 +50,7 @@ export interface WeatherApiService {
   getAstroData: (coordinates?: Coordinates) => Promise<Partial<AppData['astro']> | undefined>;
   getLifeSuggestions: (coordinates?: Coordinates) => Promise<LifeSuggestion[] | undefined>;
   getAlerts: (coordinates?: Coordinates) => Promise<Partial<AppData['alerts']> | undefined>;
+  getObservationStations: (options?: { county?: string }) => Promise<ObservationStation[] | undefined>;
   getFavorites: () => Promise<unknown[] | undefined>;
   addFavorite: (data: unknown) => Promise<unknown>;
   removeFavorite: (id: string) => Promise<void>;
@@ -50,11 +71,27 @@ interface CwaCurrentWeatherResponse {
     precipitationIntensity: number;
     weatherCode: number;
   };
+  hourly?: Array<{
+    time: string;
+    temp: string;
+    pop: string;
+    status?: string;
+    icon?: string;
+  }>;
+  error?: { code?: string; message?: string };
+}
+
+interface CwaObservationStationsResponse {
+  ok: boolean;
+  stations?: ObservationStation[];
   error?: { code?: string; message?: string };
 }
 
 interface MoenvAirQualityResponse {
   ok: boolean;
+  station?: {
+    name?: string;
+  };
   airQuality?: {
     value: number;
     status: string;
@@ -111,7 +148,24 @@ function formatUpdateTime(value?: string): string {
   return match?.[1] ?? new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-async function getCurrentWeather(coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation }> {
+function resolveHourlyIcon(icon?: string, status?: string): Pick<HourlyForecast, 'icon' | 'iconColor'> {
+  const normalizedIcon = icon?.toLowerCase() ?? '';
+  const period = normalizedIcon.includes('moon') || normalizedIcon.includes('night') ? 'night' : 'day';
+  return { icon: resolveWeatherConditionIcon(status, period), iconColor: '#64748B' };
+}
+
+function normalizeHourlyForecast(items?: CwaCurrentWeatherResponse['hourly']): HourlyForecast[] | undefined {
+  if (!items?.length) return undefined;
+
+  return items.slice(0, 6).map((item) => ({
+    time: item.time,
+    temp: item.temp,
+    pop: item.pop,
+    ...resolveHourlyIcon(item.icon, item.status),
+  }));
+}
+
+async function getCurrentWeather(coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }> {
   const parameters = new URLSearchParams({
     city: location.city,
     district: location.district,
@@ -124,6 +178,7 @@ async function getCurrentWeather(coordinates: Coordinates, location: Pick<Taiwan
   return {
     updateTime: formatUpdateTime(observation.observedAt),
     data: response.current,
+    hourly: normalizeHourlyForecast(response.hourly),
     observation: {
       latitude: response.location?.latitude ?? coordinates.latitude,
       longitude: response.location?.longitude ?? coordinates.longitude,
@@ -141,6 +196,15 @@ async function getCurrentWeather(coordinates: Coordinates, location: Pick<Taiwan
   };
 }
 
+async function getObservationStations(options?: { county?: string }): Promise<ObservationStation[] | undefined> {
+  const parameters = new URLSearchParams();
+  if (options?.county) parameters.set('county', options.county);
+  const query = parameters.toString();
+  const response = await fetchJson<CwaObservationStationsResponse>(`${WEATHER_WORKER_BASE_URL}/weather/observation${query ? `?${query}` : ''}`);
+  if (!response.ok || !response.stations) throw new Error(response.error?.message ?? '中央氣象署測站觀測資料不完整');
+  return response.stations;
+}
+
 async function getAQI(coordinates?: Coordinates): Promise<Partial<AppData['aqi']> | undefined> {
   if (!coordinates) return undefined;
   const parameters = new URLSearchParams({
@@ -153,6 +217,7 @@ async function getAQI(coordinates?: Coordinates): Promise<Partial<AppData['aqi']
   return {
     value: airQuality.value,
     status: airQuality.status,
+    ...(response.station?.name ? { stationName: response.station.name } : {}),
     ...(airQuality.pm25 == null ? {} : { pm25: airQuality.pm25 }),
     ...(airQuality.pm10 == null ? {} : { pm10: airQuality.pm10 }),
     ...(airQuality.o3 == null ? {} : { o3: airQuality.o3 }),
@@ -176,6 +241,7 @@ export const weatherApi: WeatherApiService = {
   getAstroData: async () => undefined,
   getLifeSuggestions: async () => undefined,
   getAlerts: async () => undefined,
+  getObservationStations: async () => undefined,
   getFavorites: async () => undefined,
   addFavorite: async () => undefined,
   removeFavorite: async () => undefined,

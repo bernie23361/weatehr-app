@@ -1,15 +1,17 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Image } from 'expo-image';
+﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Animated, Pressable, ScrollView, Text, View } from 'react-native';
-import { Heart } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
 import { SectionCard, SectionHeading, StatCard, subtleShadow } from '@/components/common';
 import { WeatherIcon } from '@/components/weather-icon';
+import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
+import { resolveAqiStatus } from '@/data/aqi-status';
+import { resolveWeatherCardGradientColors } from '@/data/city-ambient-colors';
 import { resolveFeelsLikeStatus, resolveHumidityStatus, resolveWindStatus } from '@/data/weather-stat-status';
 import { WeatherScene } from '@/src/weather-scene/components/weather-scene';
 import { resolveWeatherScene } from '@/src/weather-scene/engine/resolve-weather-scene';
 import type { WeatherSceneInput } from '@/src/weather-scene/types';
-import type { AppData, HourlyForecast, LifeSuggestion, SrdiPresentation, WeeklyForecast, WeeklyPeriod } from '@/types/weather';
+import type { AppData, HourlyForecast, LifeSuggestion, WeeklyForecast, WeeklyPeriod } from '@/types/weather';
 
 interface WeatherCardProps {
   data: AppData;
@@ -19,21 +21,46 @@ interface WeatherCardProps {
   sceneInput?: WeatherSceneInput;
 }
 
-const weatherConditionImages = {
-  晴朗: require('../assets/weather-clear.png'),
-  晴時多雲: require('../assets/weather-partly-cloudy-magnific.png'),
-  多雲: require('../assets/weather-cloudy.png'),
-  陰天: require('../assets/weather-overcast.png'),
-  有霧: require('../assets/weather-cloudy.png'),
-  毛毛雨: require('../assets/weather-rain.png'),
-  有雨: require('../assets/weather-rain.png'),
-  雷雨: require('../assets/weather-rain.png'),
-  降雪: require('../assets/weather-rain.png'),
-  天氣變化: require('../assets/weather-partly-cloudy-magnific.png'),
-} as const;
+const parseClockMinutes = (value: string) => {
+  const match = value.match(/(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+};
+
+const getCurrentClockMinutes = () => {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+};
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const getSolarProgress = (nowMinutes: number, sunrise: string, sunset: string) => {
+  const sunriseMinutes = parseClockMinutes(sunrise);
+  const sunsetMinutes = parseClockMinutes(sunset);
+  if (sunriseMinutes == null || sunsetMinutes == null || sunsetMinutes <= sunriseMinutes) return 0.5;
+  return clamp((nowMinutes - sunriseMinutes) / (sunsetMinutes - sunriseMinutes), 0, 1);
+};
+
+const getSolarArcPosition = (progress: number) => {
+  const start = { x: 24, y: 146 };
+  const control = { x: 160, y: 48 };
+  const end = { x: 296, y: 146 };
+  const inverse = 1 - progress;
+  return {
+    x: inverse * inverse * start.x + 2 * inverse * progress * control.x + progress * progress * end.x,
+    y: inverse * inverse * start.y + 2 * inverse * progress * control.y + progress * progress * end.y,
+  };
+};
+
 
 export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggleFavorite, onOpenAqi, sceneInput }: WeatherCardProps) {
   const [temperatureWidth, setTemperatureWidth] = useState(72);
+  const [currentMinutes, setCurrentMinutes] = useState(getCurrentClockMinutes);
+  const liveDotPulse = useRef(new Animated.Value(0)).current;
+  const weatherIconFloat = useRef(new Animated.Value(0)).current;
   const statusCharacters = [...data.weather.status];
   const estimatedCharacterWidth = 14;
   const comfortableGap = 8;
@@ -41,18 +68,53 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
   const comfortableStatusWidth = naturalStatusWidth + Math.max(0, statusCharacters.length - 1) * comfortableGap;
   const statusWidth = Math.max(naturalStatusWidth, Math.min(temperatureWidth, comfortableStatusWidth));
   const statusOffset = (temperatureWidth - statusWidth) / 2;
-  const conditionImage = weatherConditionImages[data.weather.status as keyof typeof weatherConditionImages] ?? weatherConditionImages.晴時多雲;
   const feelsLikeStatus = resolveFeelsLikeStatus(data.weather.feelsLike);
   const humidityStatus = resolveHumidityStatus(data.weather.humidity);
   const windStatus = resolveWindStatus(data.weather.windSpeed);
+  const aqiStatus = resolveAqiStatus(data.aqi.value, data.aqi.status);
+  const ambientGradientColors = resolveWeatherCardGradientColors(data.location.city);
   const scene = useMemo(() => sceneInput ? resolveWeatherScene(sceneInput) : undefined, [sceneInput]);
+  const sunriseMinutes = parseClockMinutes(data.astro.sunrise);
+  const sunsetMinutes = parseClockMinutes(data.astro.sunset);
+  const isDaytime = sunriseMinutes != null && sunsetMinutes != null
+    ? currentMinutes >= sunriseMinutes && currentMinutes < sunsetMinutes
+    : currentMinutes >= 6 * 60 && currentMinutes < 18 * 60;
+  const weatherIconPeriod = isDaytime ? 'day' : 'night';
+  const conditionIcon = resolveWeatherConditionIcon(data.weather.status, weatherIconPeriod);
   const primaryText = scene?.surface.textPrimary ?? '#1E293B';
   const secondaryText = scene?.surface.textSecondary ?? '#64748B';
-  const isNightConditionWithoutSun = scene && scene.celestial.mode !== 'sun' && ['晴朗','晴時多雲'].includes(data.weather.status);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentMinutes(getCurrentClockMinutes()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const liveDotAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(liveDotPulse, { toValue: 1, duration: 1100, useNativeDriver: true }),
+        Animated.timing(liveDotPulse, { toValue: 0, duration: 1100, useNativeDriver: true }),
+      ]),
+    );
+    const weatherIconAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(weatherIconFloat, { toValue: 1, duration: 1600, useNativeDriver: true }),
+        Animated.timing(weatherIconFloat, { toValue: 0, duration: 1600, useNativeDriver: true }),
+      ]),
+    );
+
+    liveDotAnimation.start();
+    weatherIconAnimation.start();
+
+    return () => {
+      liveDotAnimation.stop();
+      weatherIconAnimation.stop();
+    };
+  }, [liveDotPulse, weatherIconFloat]);
 
   return (
     <View style={{ backgroundColor: scene?.surface.cardTint ?? '#FFFFFF', padding: 20, paddingBottom: 24, borderRadius: 28, borderCurve: 'continuous', boxShadow: '0 4px 20px rgba(0,0,0,0.02)', overflow: 'hidden' }}>
-      {scene ? <WeatherScene scene={scene} /> : <LinearGradient colors={['rgba(224,242,254,0.70)', 'rgba(239,246,255,0.30)', 'rgba(255,255,255,0)']} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '60%' }} />}
+      {scene ? <WeatherScene scene={scene} /> : <LinearGradient colors={ambientGradientColors} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '60%' }} />}
       <LinearGradient colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.90)', 'rgba(255,255,255,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 1 }} />
       <View style={{ marginBottom: 20 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
@@ -60,8 +122,8 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
             {data.location.city}{data.location.district}
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 }}>
-              <View style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: '#4ADE80' }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: '#E2E8F0' }}>
+              <Animated.View style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: '#4ADE80', opacity: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }), transform: [{ scale: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.78, 1.18] }) }] }} />
               <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '500' }}>{data.location.updateTime} 更新</Text>
             </View>
             <FavoriteButton isFavorite={isFavorite} onPress={onToggleFavorite} />
@@ -79,25 +141,27 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
               ))}
             </View>
           </View>
-          <View style={{ width: 96, height: 96, marginRight: 4, alignItems: 'center', justifyContent: 'center', transform: [{ translateY: -4 },{scale:scene?.celestial.mode==='none'?1:(scene?.celestial.scale ?? 1)}],opacity:scene?.celestial.mode==='none'?1:(scene?.celestial.opacity ?? 1),filter:scene&&scene.celestial.mode!=='none'?[{brightness:scene.celestial.brightness},{saturate:scene.celestial.saturation}]:undefined,boxShadow:scene&&scene.celestial.glow>0?`0 0 ${Math.round(18+scene.celestial.glow*24)}px rgba(226,232,240,${scene.celestial.glow*.35})`:undefined }}>
-            {isNightConditionWithoutSun && scene.celestial.mode === 'moon' ? <WeatherIcon name="moon" size={66} color={scene.palette.cloudLight} fill={scene.palette.cloudLight} strokeWidth={1.3}/>:<Image source={isNightConditionWithoutSun?weatherConditionImages.多雲:conditionImage} contentFit="contain" accessibilityLabel={`${data.weather.status}天氣狀態`} style={{ width: '85%', height: '85%' }} />}
-          </View>
+          <Animated.View style={{ transform: [{ translateY: weatherIconFloat.interpolate({ inputRange: [0, 1], outputRange: [0, -6] }) }] }}>
+            <View style={{ width: 96, height: 96, marginRight: 4, alignItems: 'center', justifyContent: 'center', transform: [{ translateY: 16 },{scale:scene?.celestial.mode==='none'?1:(scene?.celestial.scale ?? 1)}],opacity:scene?.celestial.mode==='none'?1:(scene?.celestial.opacity ?? 1),filter:scene&&scene.celestial.mode!=='none'?[{brightness:scene.celestial.brightness},{saturate:scene.celestial.saturation}]:undefined,boxShadow:scene&&scene.celestial.glow>0?`0 0 ${Math.round(18+scene.celestial.glow*24)}px rgba(226,232,240,${scene.celestial.glow*.35})`:undefined }}>
+            <WeatherIcon name={conditionIcon} size={124} accessibilityLabel={`${data.weather.status}天氣狀態`} style={{ width: 124, height: 106 }} />
+            </View>
+          </Animated.View>
         </View>
       </View>
 
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 }}>
-        <StatCard icon="thermometer" label="體感" value={data.weather.feelsLike} status={feelsLikeStatus.label} iconColor="#F87171" badgeBg={feelsLikeStatus.badgeBg} badgeText={feelsLikeStatus.badgeText} />
-        <StatCard icon="droplets" label="濕度" value={data.weather.humidity} status={humidityStatus.label} iconColor="#60A5FA" badgeBg={humidityStatus.badgeBg} badgeText={humidityStatus.badgeText} />
-        <StatCard icon="wind" label="風速" value={data.weather.windSpeed} status={windStatus.label} iconColor="#94A3B8" badgeBg={windStatus.badgeBg} badgeText={windStatus.badgeText} />
+        <StatCard label="體感溫度" value={data.weather.feelsLike} status={feelsLikeStatus.label} badgeBg={feelsLikeStatus.badgeBg} badgeText={feelsLikeStatus.badgeText} />
+        <StatCard label="相對濕度" value={data.weather.humidity} status={humidityStatus.label} badgeBg={humidityStatus.badgeBg} badgeText={humidityStatus.badgeText} />
+        <StatCard label="平均風速" value={data.weather.windSpeed} status={windStatus.label} badgeBg={windStatus.badgeBg} badgeText={windStatus.badgeText} />
       </View>
 
       <Pressable onPress={onOpenAqi} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4, opacity: pressed ? 0.6 : 1 })}>
-        <WeatherIcon name="leaf" size={16} color="#22C55E" />
+        <AqiLeafIcon size={16} color="#22C55E" />
         <View style={{ flex: 1, height: 5 }}>
-          <LinearGradient colors={['#4ADE80', '#FACC15', '#8B4513']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ height: 5, borderRadius: 999 }} />
-          <View style={{ position: 'absolute', left: '15%', top: -6, width: 14, height: 14, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: '#4ADE80', boxShadow: subtleShadow }} />
+          <LinearGradient colors={['#4ADE80', '#FACC15', '#8B4513']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ height: 5, borderRadius: 999, borderWidth: 1, borderColor: '#CBD5E1' }} />
+          <View style={{ position: 'absolute', left: `${aqiStatus.indicatorPercent}%`, top: '50%', width: 14, height: 14, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 2.5, borderColor: aqiStatus.indicatorColor, transform: [{ translateX: -7 }, { translateY: -7 }], boxShadow: subtleShadow }} />
         </View>
-        <Text style={{ color: '#16A34A', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] }}>
+        <Text style={{ color: aqiStatus.indicatorColor, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] }}>
           {data.aqi.value} <Text style={{ color: '#94A3B8', fontWeight: '400', fontSize: 10 }}>AQI</Text>
         </Text>
       </Pressable>
@@ -118,30 +182,10 @@ function SuggestionCard({ item }: { item: LifeSuggestion }) {
   );
 }
 
-export const LifeSuggestionsSection = memo(function LifeSuggestionsSection({ suggestions, srdi }: { suggestions: LifeSuggestion[]; srdi: SrdiPresentation }) {
+export const LifeSuggestionsSection = memo(function LifeSuggestionsSection({ suggestions }: { suggestions: LifeSuggestion[] }) {
   return (
     <SectionCard>
-      <SectionHeading>今天適合做什麼</SectionHeading>
-      <Pressable style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, padding: 16, borderRadius: 22, borderCurve: 'continuous', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F8FAFC', boxShadow: pressed ? '0 4px 8px rgba(0,0,0,0.08)' : subtleShadow, transform: [{ translateY: pressed ? -4 : 0 }] })}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flexShrink: 1 }}>
-          <View style={{ padding: 12, borderRadius: 18, backgroundColor: srdi.iconBg, boxShadow: subtleShadow }}>
-            <WeatherIcon name="shield" size={24} color={srdi.colorText} />
-          </View>
-          <View style={{ flexShrink: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <Text style={{ color: '#1E293B', fontSize: 14, fontWeight: '600' }}>機車族防禦指數</Text>
-              <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: srdi.badgeBg }}>
-                <Text style={{ color: srdi.colorText, fontSize: 9, fontWeight: '600' }}>{srdi.status}</Text>
-              </View>
-            </View>
-            <Text style={{ color: '#94A3B8', fontSize: 11, marginTop: 4 }}>{srdi.desc}</Text>
-          </View>
-        </View>
-        <View style={{ minWidth: 56, alignItems: 'center', marginLeft: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: '#F8FAFC', backgroundColor: '#FFFFFF', boxShadow: subtleShadow }}>
-          <Text style={{ color: '#94A3B8', fontSize: 9, marginBottom: 2 }}>評級</Text>
-          <Text style={{ color: srdi.colorText, fontSize: 14, fontWeight: '700' }}>{srdi.rating}</Text>
-        </View>
-      </Pressable>
+      <SectionHeading>現在適合做什麼</SectionHeading>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={98} decelerationRate="fast" contentContainerStyle={{ paddingBottom: 8, marginHorizontal: -4 }}>
         {suggestions.map((item) => <SuggestionCard key={item.id} item={item} />)}
       </ScrollView>
@@ -157,7 +201,9 @@ export const HourlyForecastSection = memo(function HourlyForecastSection({ forec
         {forecast.map((item, index) => (
           <View key={`${item.time}-${index}`} style={{ width: 44, alignItems: 'center' }}>
             <Text style={{ color: index === 0 ? '#2563EB' : '#64748B', fontSize: 11, fontWeight: '500', marginBottom: 8 }}>{item.time}</Text>
-            <WeatherIcon name={item.icon} size={22} color={item.iconColor} style={{ marginBottom: 8 }} />
+            <View style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
+              <WeatherIcon name={item.icon} size={38} color={item.iconColor} />
+            </View>
             <Text style={{ color: '#334155', fontSize: 15, fontWeight: '600', marginBottom: 4, fontVariant: ['tabular-nums'] }}>{item.temp}</Text>
             <Text style={{ color: '#60A5FA', fontSize: 9, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{item.pop}</Text>
           </View>
@@ -180,9 +226,31 @@ function FavoriteButton({ isFavorite, onPress }: { isFavorite: boolean; onPress:
   return (
     <Pressable onPress={onPress} hitSlop={8} style={{ padding: 4 }}>
       <Animated.View style={{ transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.8] }) }, { rotate: progress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-15deg'] }) }] }}>
-        <Heart size={18} color={isFavorite ? '#EF4444' : '#CBD5E1'} fill={isFavorite ? '#EF4444' : 'none'} />
+        <HeartIcon isFavorite={isFavorite} />
       </Animated.View>
     </Pressable>
+  );
+}
+
+const HEART_OUTLINE_PATH = 'M19.0001 14V17H22.0001V19H18.9991L19.0001 22H17.0001L16.9991 19H14.0001V17H17.0001V14H19.0001ZM20.2426 4.75748C22.505 7.02453 22.5829 10.6361 20.4795 12.9921L19.06 11.5741C20.3901 10.05 20.3201 7.66 18.827 6.17022C17.3244 4.67104 14.9076 4.60713 13.337 6.017L12.0019 7.21536L10.6661 6.01793C9.09098 4.60609 6.67506 4.66821 5.17157 6.1717C3.68183 7.66143 3.60704 10.0474 4.97993 11.6233L13.412 20.0691L11.9999 21.4851L3.52138 12.9931C1.41705 10.6371 1.49571 7.01913 3.75736 4.75748C6.02157 2.49327 9.64519 2.41699 12.001 4.52865C14.35 2.42012 17.98 2.49012 20.2426 4.75748Z';
+
+const HEART_FILLED_PATH = 'M12.001 4.52853C14.35 2.42 17.98 2.49 20.2426 4.75736C22.5053 7.02472 22.583 10.637 20.4786 12.993L11.9999 21.485L3.52138 12.993C1.41705 10.637 1.49571 7.01901 3.75736 4.75736C6.02157 2.49315 9.64519 2.41687 12.001 4.52853Z';
+
+const AQI_LEAF_PATH = 'M20.998 3V5C20.998 14.6274 15.6255 19 8.99805 19L7.0964 18.9999C7.3079 15.9876 8.24541 14.1648 10.6939 11.9989C11.8979 10.9338 11.7965 10.3189 11.2029 10.6721C7.1193 13.1016 5.09114 16.3862 5.00119 21.6302L4.99805 22H2.99805C2.99805 20.6373 3.11376 19.3997 3.34381 18.2682C3.1133 16.9741 2.99805 15.2176 2.99805 13C2.99805 7.47715 7.4752 3 12.998 3C14.998 3 16.998 4 20.998 3Z';
+
+function AqiLeafIcon({ size = 16, color = '#22C55E' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Path d={AQI_LEAF_PATH} />
+    </Svg>
+  );
+}
+
+function HeartIcon({ isFavorite }: { isFavorite: boolean }) {
+  return (
+    <Svg width={18} height={18} viewBox="0 0 24 24" fill={isFavorite ? '#EF4444' : '#CBD5E1'}>
+      <Path d={isFavorite ? HEART_FILLED_PATH : HEART_OUTLINE_PATH} />
+    </Svg>
   );
 }
 
@@ -219,8 +287,10 @@ export const WeeklyForecastSection = memo(function WeeklyForecastSection({ forec
           return (
             <View key={`${item.day}-${index}`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <Text style={{ width: 40, color: index === 0 ? '#2563EB' : '#475569', fontSize: 13, fontWeight: '500' }}>{item.day}</Text>
-              <View style={{ width: 64, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <WeatherIcon name={icon} size={18} color={iconColor} />
+              <View style={{ width: 72, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
+                  <WeatherIcon name={icon} size={32} color={iconColor} />
+                </View>
                 <Text style={{ color: '#60A5FA', fontSize: 10, fontWeight: '500' }}>{pop}</Text>
               </View>
               <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
@@ -239,26 +309,54 @@ export const WeeklyForecastSection = memo(function WeeklyForecastSection({ forec
 });
 
 export const AstroSection = memo(function AstroSection({ data }: { data: AppData['astro'] }) {
-  const items = [
-    { title: '太陽', icon: 'sun' as const, color: '#FACC15', fill: '#FDE047', phase: '', firstLabel: '日出', first: data.sunrise, secondLabel: '日落', second: data.sunset },
-    { title: '月亮', icon: 'moon' as const, color: '#818CF8', fill: '#818CF8', phase: data.moonPhase, firstLabel: '月出', first: data.moonrise, secondLabel: '月落', second: data.moonset },
-  ];
+  const [nowMinutes, setNowMinutes] = useState(() => {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  });
+  const solarProgress = getSolarProgress(nowMinutes, data.sunrise, data.sunset);
+  const solarPosition = getSolarArcPosition(solarProgress);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      setNowMinutes(now.getHours() * 60 + now.getMinutes());
+    }, 60000);
+
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <SectionCard>
       <SectionHeading>日月預報</SectionHeading>
-      <View style={{ flexDirection: 'row', gap: 12 }}>
-        {items.map((item) => (
-          <Pressable key={item.title} style={({ pressed }) => ({ flex: 1, alignItems: 'center', padding: 16, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: '#F8FAFC', backgroundColor: '#FFFFFF', boxShadow: pressed ? '0 4px 8px rgba(0,0,0,0.08)' : subtleShadow, transform: [{ translateY: pressed ? -4 : 0 }] })}>
-            <WeatherIcon name={item.icon} size={26} color={item.color} fill={item.fill} strokeWidth={1.5} style={{ marginBottom: 8 }} />
-            <Text style={{ color: '#334155', fontSize: 13, fontWeight: '600', marginBottom: 12 }}>
-              {item.title}{item.phase ? <Text style={{ color: '#94A3B8', fontSize: 10, fontWeight: '400' }}> {item.phase}</Text> : null}
-            </Text>
-            <View style={{ width: '100%', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 8 }}>
-              <View style={{ alignItems: 'center' }}><Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 4 }}>{item.firstLabel}</Text><Text style={{ color: '#334155', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{item.first}</Text></View>
-              <View style={{ alignItems: 'center' }}><Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 4 }}>{item.secondLabel}</Text><Text style={{ color: '#334155', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{item.second}</Text></View>
+      <View style={{ position: 'relative', height: 190, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: '#E8F1FA', backgroundColor: '#FFFFFF', overflow: 'hidden', boxShadow: subtleShadow }}>
+        <LinearGradient colors={['#FFFFFF', '#F4F9FF', '#FFFDF6']} locations={[0, 0.58, 1]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+
+        <View style={{ position: 'absolute', top: 18, left: 20, right: 20, zIndex: 2, flexDirection: 'row', justifyContent: 'space-between' }}>
+          <View style={{ gap: 5 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <WeatherIcon name="sun" size={16} color="#F59E0B" fill="#FDE68A" strokeWidth={1.8} />
+              <Text style={{ color: '#64748B', fontSize: 11, fontWeight: '500' }}>今日・日出</Text>
             </View>
-          </Pressable>
-        ))}
+            <Text selectable style={{ color: '#1E293B', fontSize: 21, lineHeight: 25, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{data.sunrise}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end', gap: 5 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: '#64748B', fontSize: 11, fontWeight: '500' }}>今日・日落</Text>
+              <WeatherIcon name="sun" size={16} color="#F59E0B" fill="#FDE68A" strokeWidth={1.8} />
+            </View>
+            <Text selectable style={{ color: '#1E293B', fontSize: 21, lineHeight: 25, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{data.sunset}</Text>
+          </View>
+        </View>
+
+        <View style={{ position: 'absolute', left: 14, right: 14, top: 18, height: 160 }}>
+          <Svg width="100%" height={160} viewBox="0 0 320 160" preserveAspectRatio="none">
+            <Path d="M 24 146 Q 160 48 296 146" stroke="rgba(245,158,11,0.10)" strokeWidth={12} strokeLinecap="round" fill="none" />
+            <Path d="M 24 146 Q 160 48 296 146" stroke="#F6C453" strokeWidth={2.25} strokeLinecap="round" fill="none" />
+          </Svg>
+          <View style={{ position: 'absolute', left: `${(solarPosition.x / 320) * 100}%`, top: solarPosition.y, width: 34, height: 34, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8D8', transform: [{ translateX: -17 }, { translateY: -17 }], boxShadow: '0 0 24px rgba(250,184,36,0.52)' }}>
+            <WeatherIcon name="sun" size={23} color="#F59E0B" fill="#FACC15" strokeWidth={1.5} />
+          </View>
+        </View>
       </View>
     </SectionCard>
   );

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Bike,
   Cloud,
+  CloudRain,
   CupSoda,
   Dog,
   Droplets,
@@ -28,13 +29,16 @@ import {
   X,
   type LucideProps,
 } from 'lucide-react-native';
-import type { WeatherIconName } from '@/types/weather';
+import { Image } from 'expo-image';
+import { makinWeatherIconSources } from '@/data/weather-icon-mapping';
+import type { AppWeatherIconName, WeatherIconName } from '@/types/weather';
 
 const icons = {
   activity: Activity,
   'alert-triangle': AlertTriangle,
   bike: Bike,
   cloud: Cloud,
+  'cloud-rain': CloudRain,
   'cup-soda': CupSoda,
   dog: Dog,
   droplets: Droplets,
@@ -60,7 +64,13 @@ const icons = {
   x: X,
 } satisfies Record<WeatherIconName, React.ComponentType<LucideProps>>;
 
-export function WeatherIcon({ name, ...props }: LucideProps & { name: WeatherIconName }) {
-  const Icon = icons[name];
+export function WeatherIcon({ name, ...props }: LucideProps & { name: AppWeatherIconName }) {
+  if (name in makinWeatherIconSources) {
+    const { size = 24, style } = props;
+    const iconSize = typeof size === 'number' ? size : 24;
+    return <Image source={makinWeatherIconSources[name as keyof typeof makinWeatherIconSources]} contentFit="contain" accessibilityLabel={name} style={[{ width: iconSize, height: iconSize }, style as never]} />;
+  }
+
+  const Icon = icons[name as WeatherIconName];
   return <Icon {...props} />;
 }
