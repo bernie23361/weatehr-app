@@ -165,7 +165,9 @@ function main() {
   let totalPoints = 0;
 
   for (const route of routes) {
-    if (route.type !== 'national') continue;
+    // Only mainlines (-hw). The -hu routes are interchange/ramp fragments that
+    // overlap the mainlines and make the map look cluttered.
+    if (route.type !== 'national' || !route.id.endsWith('-hw')) continue;
     const excluded = new Set(EXCLUDED_SEGMENTS[route.id] ?? []);
     const pieces = route.segments
       .filter((_, index) => !excluded.has(index))
@@ -193,7 +195,7 @@ export const taiwanHighwayCenterlines: GeoJSON.FeatureCollection = ${JSON.string
 
   console.log(`Generated ${OUT_TS}`);
   console.log(`features: ${features.length}, total points: ${totalPoints}`);
-  for (const route of routes.filter((route) => route.type === 'national')) {
+  for (const route of routes.filter((route) => route.type === 'national' && route.id.endsWith('-hw'))) {
     const excluded = EXCLUDED_SEGMENTS[route.id] ?? [];
     const count = features.filter((feature) => feature.properties.routeId === route.id).length;
     console.log(`  ${route.id}: ${count} feature(s)${excluded.length ? ` (excluded segs ${excluded.join(', ')})` : ''}`);

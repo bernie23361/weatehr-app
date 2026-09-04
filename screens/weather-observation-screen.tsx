@@ -18,7 +18,7 @@ type ObservationLayer = 'radar' | 'temperature' | 'rainfall' | 'wind' | 'humidit
 const layerOrder: ObservationLayer[] = ['radar', 'temperature', 'rainfall', 'wind', 'humidity', 'visibility', 'highways'];
 
 const HIGHWAY_FILL_COLOR = '#9CA3AF';
-const HIGHWAY_BORDER_COLOR = '#4B5563';
+const HIGHWAY_BORDER_COLOR = '#374151';
 
 const temperatureGradientStops: ColorStop[] = TEMPERATURE_COLOR_STOPS
   .filter((stop, index, stops) => index === 0 || stop.color !== stops[index - 1].color)
@@ -469,15 +469,16 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
           />
         </GeoJSONSource>
       ) : null}
-      {layer === 'highways' ? (
+{layer === 'highways' ? (
         <GeoJSONSource key="highways-source" id="highways-source" data={highwayGeoJson}>
           <Layer
-            id="national-highways-border"
+            id="national-highways-left-border"
             type="line"
             filter={['==', ['get', 'type'], 'national']}
             paint={{
               'line-color': HIGHWAY_BORDER_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 4.8, 16, 9],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 16, 6],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1.8, 16, -3.6],
               'line-opacity': 0.96,
             }}
             layout={{ 'line-cap': 'round', 'line-join': 'round' }}
@@ -488,9 +489,21 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
             filter={['==', ['get', 'type'], 'national']}
             paint={{
               'line-color': HIGHWAY_FILL_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.7, 16, 3.6],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1, 16, -2],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 4],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1.8, 16, -3.6],
               'line-opacity': 1,
+            }}
+            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          />
+          <Layer
+            id="national-highways-right-border"
+            type="line"
+            filter={['==', ['get', 'type'], 'national']}
+            paint={{
+              'line-color': HIGHWAY_BORDER_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 16, 6],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 16, 3.6],
+              'line-opacity': 0.96,
             }}
             layout={{ 'line-cap': 'round', 'line-join': 'round' }}
           />
@@ -500,11 +513,11 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
             filter={['==', ['get', 'type'], 'national']}
             paint={{
               'line-color': HIGHWAY_FILL_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.7, 16, 3.6],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1, 16, 2],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 4],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 16, 3.6],
               'line-opacity': 1,
             }}
-layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
           />
         </GeoJSONSource>
       ) : null}
