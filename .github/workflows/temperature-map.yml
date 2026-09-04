@@ -1,0 +1,45 @@
+name: Generate temperature map
+
+on:
+  schedule:
+    # CWA updates at :00/:10/...; wait three minutes for publication.
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: temperature-map
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate PNG and metadata
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+        run: node scripts/generate-temperature-map.mjs
+
+      - name: Upload PNG to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object put weather-temperature-assets/temperature/latest.png --file artifacts/temperature/latest.png --remote
+
+      # Metadata is uploaded last so its observation time only advances after the PNG is available.
+      - name: Upload metadata to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 r2 object put weather-temperature-assets/temperature/latest.json --file artifacts/temperature/latest.json --remote

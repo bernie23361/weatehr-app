@@ -5,5 +5,8 @@
     "paths": {
       "@/*": ["./*"]
     }
-  }
+  },
+  "exclude": [
+    "cloudflare-worker/*.original-backup.mjs"
+  ]
 }

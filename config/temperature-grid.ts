@@ -14,7 +14,7 @@ export const TEMPERATURE_BOUNDS: TemperatureBounds = {
 
 export const TEMPERATURE_MIN = -5;
 export const TEMPERATURE_MAX = 39;
-export const TEMPERATURE_ABOVE_MAX_COLOR = '#8E3E9F';
+export const TEMPERATURE_ABOVE_MAX_COLOR = '#782B95';
 
 export interface TemperatureColorStop {
   temperature: number;
@@ -22,22 +22,32 @@ export interface TemperatureColorStop {
 }
 
 export const TEMPERATURE_COLOR_STOPS: TemperatureColorStop[] = [
-  { temperature: TEMPERATURE_MIN, color: '#0369A1' },
-  { temperature: 10, color: '#0369A1' },
-  { temperature: 11, color: '#166534' },
-  { temperature: 15, color: '#166534' },
-  { temperature: 16, color: '#15803D' },
-  { temperature: 19, color: '#15803D' },
-  { temperature: 20, color: '#4D7C0F' },
-  { temperature: 23, color: '#4D7C0F' },
-  { temperature: 24, color: '#A16207' },
-  { temperature: 26, color: '#A16207' },
-  { temperature: 27, color: '#B45309' },
-  { temperature: 30, color: '#B45309' },
-  { temperature: 31, color: '#C2410C' },
-  { temperature: 34, color: '#C2410C' },
-  { temperature: 35, color: '#D7194A' },
-  { temperature: TEMPERATURE_MAX, color: '#D7194A' },
+  // 依中央氣象署即時溫度分布圖圖例取色（2026-08-20）。
+  { temperature: TEMPERATURE_MIN, color: '#107388' },
+  { temperature: -1, color: '#107388' },
+  { temperature: 1, color: '#227E93' },
+  { temperature: 3, color: '#3D94A8' },
+  { temperature: 5, color: '#63B0C2' },
+  { temperature: 7, color: '#87CCD9' },
+  { temperature: 9, color: '#A5E1EC' },
+  { temperature: 10, color: '#B3EBF8' },
+  { temperature: 11, color: '#0D894D' },
+  { temperature: 13, color: '#2FA257' },
+  { temperature: 15, color: '#51B265' },
+  { temperature: 17, color: '#74C16F' },
+  { temperature: 19, color: '#95D07E' },
+  { temperature: 21, color: '#BBDF88' },
+  { temperature: 23, color: '#D9F191' },
+  { temperature: 25, color: '#F6E78C' },
+  { temperature: 27, color: '#F3C361' },
+  { temperature: 29, color: '#EB9D39' },
+  { temperature: 31, color: '#E07B07' },
+  { temperature: 33, color: '#EA175A' },
+  { temperature: 35, color: '#75030B' },
+  { temperature: 36, color: '#9A68B1' },
+  { temperature: 37, color: '#8D4FA4' },
+  { temperature: 38, color: '#782B95' },
+  { temperature: TEMPERATURE_MAX, color: '#782B95' },
 ];
 
 const hexToRgb = (hex: string): [number, number, number] => {
@@ -87,10 +97,20 @@ export const TEMPERATURE_COLOR_BY_DEGREE: Record<number, string> = Object.fromEn
 const DEFAULT_TEMPERATURE_WORKER_URL = 'https://weather-temperature-worker.weather0215.workers.dev';
 const TEMPERATURE_IMAGE_SCALE = 4;
 
+export const TEMPERATURE_GRID_REQUESTS_ENABLED = process.env.EXPO_PUBLIC_TEMPERATURE_GRID_ENABLED !== 'false';
+
 const pad = (value: number) => value.toFixed(6);
 
+const temperatureWorkerUrl = (): string => (
+  process.env.EXPO_PUBLIC_TEMPERATURE_WORKER_URL || DEFAULT_TEMPERATURE_WORKER_URL
+).replace(/\/$/, '');
+
+export function temperatureGridMetadataUrl(): string {
+  return `${temperatureWorkerUrl()}/api/temperature`;
+}
+
 export function temperatureGridImageUrl(): string {
-  const workerUrl = (process.env.EXPO_PUBLIC_TEMPERATURE_WORKER_URL || DEFAULT_TEMPERATURE_WORKER_URL).replace(/\/$/, '');
+  const workerUrl = temperatureWorkerUrl();
   const palette = Array.from({ length: TEMPERATURE_MAX - TEMPERATURE_MIN + 1 }, (_, index) => {
     const temperature = TEMPERATURE_MIN + index;
     return `${temperature}:${TEMPERATURE_COLOR_BY_DEGREE[temperature]}`;
@@ -102,5 +122,12 @@ export function temperatureGridImageUrl(): string {
     TEMPERATURE_BOUNDS.bottomLeft,
   ].map(([longitude, latitude]) => `${pad(longitude)},${pad(latitude)}`).join(';');
 
-  return `${workerUrl}/api/temperature/map.png?scale=${TEMPERATURE_IMAGE_SCALE}&min=${TEMPERATURE_MIN}&max=${TEMPERATURE_MAX}&palette=${encodeURIComponent(palette)}&bounds=${encodeURIComponent(bounds)}`;
+  const query = [
+    `scale=${TEMPERATURE_IMAGE_SCALE}`,
+    `min=${TEMPERATURE_MIN}`,
+    `max=${TEMPERATURE_MAX}`,
+    `palette=${encodeURIComponent(palette)}`,
+    `bounds=${encodeURIComponent(bounds)}`,
+  ];
+  return `${workerUrl}/api/temperature/map.png?${query.join('&')}`;
 }

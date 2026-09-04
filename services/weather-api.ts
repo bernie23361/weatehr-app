@@ -46,7 +46,7 @@ export interface WeatherApiService {
   getAQI: (coordinates?: Coordinates) => Promise<Partial<AppData['aqi']> | undefined>;
   getSRDI: (coordinates?: Coordinates) => Promise<{ level: SrdiLevel } | undefined>;
   getHourlyForecast: (coordinates?: Coordinates) => Promise<HourlyForecast[] | undefined>;
-  getWeeklyForecast: (coordinates?: Coordinates) => Promise<WeeklyForecast[] | undefined>;
+  getWeeklyForecast: (location: Pick<TaiwanLocation, 'city' | 'district'>) => Promise<WeeklyForecast[] | undefined>;
   getAstroData: (coordinates?: Coordinates) => Promise<Partial<AppData['astro']> | undefined>;
   getLifeSuggestions: (coordinates?: Coordinates) => Promise<LifeSuggestion[] | undefined>;
   getAlerts: (coordinates?: Coordinates) => Promise<Partial<AppData['alerts']> | undefined>;
@@ -84,6 +84,18 @@ interface CwaCurrentWeatherResponse {
 interface CwaObservationStationsResponse {
   ok: boolean;
   stations?: ObservationStation[];
+  error?: { code?: string; message?: string };
+}
+
+interface CwaWeeklyForecastResponse {
+  ok: boolean;
+  weekly?: Array<{
+    date: string;
+    day?: { status: string; weatherCode: number; pop: number | null; min?: number; max?: number };
+    night?: { status: string; weatherCode: number; pop: number | null; min?: number; max?: number };
+    min: number;
+    max: number;
+  }>;
   error?: { code?: string; message?: string };
 }
 
@@ -131,9 +143,9 @@ const taiwanCityCenters: Record<string, Coordinates> = {
   連江縣: { latitude: 26.1605, longitude: 119.9517 },
 };
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, timeoutMs = 12_000): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(`Weather API HTTP ${response.status}`);
@@ -163,6 +175,64 @@ function normalizeHourlyForecast(items?: CwaCurrentWeatherResponse['hourly']): H
     pop: item.pop,
     ...resolveHourlyIcon(item.icon, item.status),
   }));
+}
+
+const WEEKDAY_LABELS = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'] as const;
+
+function weeklyDayLabel(date: string, index: number): string {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const parsed = new Date(`${date}T00:00:00+08:00`);
+  const weekday = date === today ? '今天' : Number.isNaN(parsed.getTime()) ? `第 ${index + 1} 天` : WEEKDAY_LABELS[parsed.getDay()];
+  const dayOfMonth = Number.parseInt(date.slice(8, 10), 10);
+  return Number.isFinite(dayOfMonth) ? `${weekday}（${dayOfMonth}）` : weekday;
+}
+
+function normalizeWeeklyForecast(items?: CwaWeeklyForecastResponse['weekly']): WeeklyForecast[] | undefined {
+  if (!items?.length) return undefined;
+  const temperatures = items.flatMap((item) => [item.min, item.max, item.day?.min, item.day?.max, item.night?.min, item.night?.max]).filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const minimum = Math.min(...temperatures);
+  const maximum = Math.max(...temperatures);
+  const range = Math.max(maximum - minimum, 1);
+  const progressFor = (min: number, max: number) => {
+    const left = Math.round(((min - minimum) / range) * 35);
+    const width = Math.max(12, Math.round(((max - min) / range) * 65));
+    return { left: `${left}%` as const, width: `${Math.min(width, 100 - left)}%` as const };
+  };
+  const probabilityLabel = (value: number | null) => value == null ? '—' : `${value}%`;
+
+  return items.slice(0, 7).map((item, index) => {
+    const fallback = { status: '多雲', weatherCode: 4, pop: null, min: item.min, max: item.max };
+    const day = item.day ?? item.night ?? fallback;
+    const night = item.night ?? item.day ?? day;
+    const dailyProgress = progressFor(item.min, item.max);
+    const dayMin = day.min ?? item.min;
+    const dayMax = day.max ?? item.max;
+    const nightMin = night.min ?? item.min;
+    const nightMax = night.max ?? item.max;
+    const dayProgress = progressFor(dayMin, dayMax);
+    const nightProgress = progressFor(nightMin, nightMax);
+    return {
+      day: weeklyDayLabel(item.date, index),
+      icon: resolveWeatherConditionIcon(day.status, 'day'),
+      iconColor: '#64748B',
+      pop: probabilityLabel(day.pop),
+      nightIcon: resolveWeatherConditionIcon(night.status, 'night'),
+      nightIconColor: '#64748B',
+      nightPop: probabilityLabel(night.pop),
+      min: String(Math.round(item.min)),
+      max: String(Math.round(item.max)),
+      progressLeft: dailyProgress.left,
+      progressWidth: dailyProgress.width,
+      dayMin: String(Math.round(dayMin)),
+      dayMax: String(Math.round(dayMax)),
+      dayProgressLeft: dayProgress.left,
+      dayProgressWidth: dayProgress.width,
+      nightMin: String(Math.round(nightMin)),
+      nightMax: String(Math.round(nightMax)),
+      nightProgressLeft: nightProgress.left,
+      nightProgressWidth: nightProgress.width,
+    };
+  });
 }
 
 async function getCurrentWeather(coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }> {
@@ -200,9 +270,30 @@ async function getObservationStations(options?: { county?: string }): Promise<Ob
   const parameters = new URLSearchParams();
   if (options?.county) parameters.set('county', options.county);
   const query = parameters.toString();
-  const response = await fetchJson<CwaObservationStationsResponse>(`${WEATHER_WORKER_BASE_URL}/weather/observation${query ? `?${query}` : ''}`);
-  if (!response.ok || !response.stations) throw new Error(response.error?.message ?? '中央氣象署測站觀測資料不完整');
-  return response.stations;
+  const url = `${WEATHER_WORKER_BASE_URL}/weather/observation${query ? `?${query}` : ''}`;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetchJson<CwaObservationStationsResponse>(url, 25_000);
+      if (!response.ok || !response.stations?.length) {
+        throw new Error(response.error?.message ?? '中央氣象署測站觀測資料不完整');
+      }
+      return response.stations;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('中央氣象署測站觀測資料載入失敗');
+}
+
+async function getWeeklyForecast(location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<WeeklyForecast[] | undefined> {
+  const parameters = new URLSearchParams({ city: location.city, district: location.district });
+  const response = await fetchJson<CwaWeeklyForecastResponse>(`${WEATHER_WORKER_BASE_URL}/weather/weekly?${parameters}`);
+  if (!response.ok || !response.weekly) throw new Error(response.error?.message ?? '中央氣象署一週預報資料不完整');
+  return normalizeWeeklyForecast(response.weekly);
 }
 
 async function getAQI(coordinates?: Coordinates): Promise<Partial<AppData['aqi']> | undefined> {
@@ -237,11 +328,11 @@ export const weatherApi: WeatherApiService = {
   getAQI,
   getSRDI: async () => undefined,
   getHourlyForecast: async () => undefined,
-  getWeeklyForecast: async () => undefined,
+  getWeeklyForecast,
   getAstroData: async () => undefined,
   getLifeSuggestions: async () => undefined,
   getAlerts: async () => undefined,
-  getObservationStations: async () => undefined,
+  getObservationStations,
   getFavorites: async () => undefined,
   addFavorite: async () => undefined,
   removeFavorite: async () => undefined,

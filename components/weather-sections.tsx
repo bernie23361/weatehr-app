@@ -1,12 +1,12 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Animated, Pressable, ScrollView, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { SectionCard, SectionHeading, StatCard, subtleShadow } from '@/components/common';
 import { WeatherIcon } from '@/components/weather-icon';
 import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
 import { resolveAqiStatus } from '@/data/aqi-status';
-import { resolveWeatherCardGradientColors } from '@/data/city-ambient-colors';
+import { disasterWeatherCardGradientColors, normalWeatherCardGradientColors } from '@/data/weather-state-colors';
 import { resolveFeelsLikeStatus, resolveHumidityStatus, resolveWindStatus } from '@/data/weather-stat-status';
 import { WeatherScene } from '@/src/weather-scene/components/weather-scene';
 import { resolveWeatherScene } from '@/src/weather-scene/engine/resolve-weather-scene';
@@ -18,6 +18,7 @@ interface WeatherCardProps {
   isFavorite: boolean;
   onToggleFavorite: () => void;
   onOpenAqi: () => void;
+  isDisasterVisualActive: boolean;
   sceneInput?: WeatherSceneInput;
 }
 
@@ -56,7 +57,7 @@ const getSolarArcPosition = (progress: number) => {
 };
 
 
-export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggleFavorite, onOpenAqi, sceneInput }: WeatherCardProps) {
+export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggleFavorite, onOpenAqi, isDisasterVisualActive, sceneInput }: WeatherCardProps) {
   const [temperatureWidth, setTemperatureWidth] = useState(72);
   const [currentMinutes, setCurrentMinutes] = useState(getCurrentClockMinutes);
   const liveDotPulse = useRef(new Animated.Value(0)).current;
@@ -72,7 +73,7 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
   const humidityStatus = resolveHumidityStatus(data.weather.humidity);
   const windStatus = resolveWindStatus(data.weather.windSpeed);
   const aqiStatus = resolveAqiStatus(data.aqi.value, data.aqi.status);
-  const ambientGradientColors = resolveWeatherCardGradientColors(data.location.city);
+  const stateGradientColors = isDisasterVisualActive ? disasterWeatherCardGradientColors : normalWeatherCardGradientColors;
   const scene = useMemo(() => sceneInput ? resolveWeatherScene(sceneInput) : undefined, [sceneInput]);
   const sunriseMinutes = parseClockMinutes(data.astro.sunrise);
   const sunsetMinutes = parseClockMinutes(data.astro.sunset);
@@ -114,7 +115,7 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
 
   return (
     <View style={{ backgroundColor: scene?.surface.cardTint ?? '#FFFFFF', padding: 20, paddingBottom: 24, borderRadius: 28, borderCurve: 'continuous', boxShadow: '0 4px 20px rgba(0,0,0,0.02)', overflow: 'hidden' }}>
-      {scene ? <WeatherScene scene={scene} /> : <LinearGradient colors={ambientGradientColors} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '60%' }} />}
+      {scene ? <WeatherScene scene={scene} ambientColor={isDisasterVisualActive ? '#BB2233' : undefined} /> : <LinearGradient colors={stateGradientColors} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '60%' }} />}
       <LinearGradient colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.90)', 'rgba(255,255,255,0)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 1 }} />
       <View style={{ marginBottom: 20 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
@@ -193,22 +194,120 @@ export const LifeSuggestionsSection = memo(function LifeSuggestionsSection({ sug
   );
 });
 
+const HOURLY_TREND_HEIGHT = 72;
+const HOURLY_TREND_TOP = 28;
+const HOURLY_TREND_BOTTOM = 58;
+
+const parseTemperature = (value: string) => {
+  const temperature = Number.parseFloat(value.replace(/[^\d.-]/g, ''));
+  return Number.isFinite(temperature) ? temperature : 0;
+};
+
+const createSmoothTrendPath = (points: Array<{ x: number; y: number }>) => {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+
+  return points.slice(1).reduce((path, point, index) => {
+    const previous = points[index];
+    const midpoint = (previous.x + point.x) / 2;
+    return `${path} C ${midpoint} ${previous.y}, ${midpoint} ${point.y}, ${point.x} ${point.y}`;
+  }, `M ${points[0].x} ${points[0].y}`);
+};
+
+function HourlyTemperatureTrend({ forecast, width }: { forecast: HourlyForecast[]; width: number }) {
+  const temperatures = forecast.map((item) => parseTemperature(item.temp));
+  const minimum = Math.min(...temperatures);
+  const maximum = Math.max(...temperatures);
+  const temperatureRange = maximum - minimum;
+  const columnWidth = width / Math.max(forecast.length, 1);
+  const points = temperatures.map((temperature, index) => ({
+    x: columnWidth * (index + 0.5),
+    y: temperatureRange === 0
+      ? (HOURLY_TREND_TOP + HOURLY_TREND_BOTTOM) / 2
+      : HOURLY_TREND_BOTTOM - ((temperature - minimum) / temperatureRange) * (HOURLY_TREND_BOTTOM - HOURLY_TREND_TOP),
+  }));
+
+  return (
+    <View
+      accessible
+      accessibilityLabel={`未來六小時溫度走勢，最高 ${maximum} 度，最低 ${minimum} 度`}
+      style={{ width, height: HOURLY_TREND_HEIGHT }}
+    >
+      <Svg width={width} height={HOURLY_TREND_HEIGHT}>
+        <Path d={createSmoothTrendPath(points)} fill="none" stroke="#475569" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point, index) => (
+          <Circle key={`${forecast[index].time}-${index}`} cx={point.x} cy={point.y} r={4.5} fill="#FFFFFF" stroke="#475569" strokeWidth={1.75} />
+        ))}
+      </Svg>
+      {forecast.map((item, index) => (
+        <Text
+          key={`${item.time}-temperature-${index}`}
+          selectable
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: columnWidth * index,
+            width: columnWidth,
+            color: '#334155',
+            fontSize: 14,
+            fontWeight: '600',
+            textAlign: 'center',
+            fontVariant: ['tabular-nums'],
+          }}
+        >
+          {item.temp}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 export const HourlyForecastSection = memo(function HourlyForecastSection({ forecast }: { forecast: HourlyForecast[] }) {
+  const visibleForecast = forecast.slice(0, 6);
+  const [contentWidth, setContentWidth] = useState(0);
+
   return (
     <SectionCard paddingBottom={20}>
       <SectionHeading>未來 6 小時</SectionHeading>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 16, paddingBottom: 4 }}>
-        {forecast.map((item, index) => (
-          <View key={`${item.time}-${index}`} style={{ width: 44, alignItems: 'center' }}>
-            <Text style={{ color: index === 0 ? '#2563EB' : '#64748B', fontSize: 11, fontWeight: '500', marginBottom: 8 }}>{item.time}</Text>
-            <View style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
-              <WeatherIcon name={item.icon} size={38} color={item.iconColor} />
+      <View onLayout={(event) => setContentWidth(event.nativeEvent.layout.width)} style={{ gap: 8 }}>
+        {contentWidth > 0 && visibleForecast.length > 1 ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: contentWidth / visibleForecast.length,
+              width: 1,
+              backgroundColor: '#E2E8F0',
+            }}
+          />
+        ) : null}
+        <View style={{ flexDirection: 'row' }}>
+          {visibleForecast.map((item, index) => (
+            <View key={`${item.time}-${index}`} style={{ flex: 1, alignItems: 'center', gap: 8 }}>
+              <Text selectable style={{ color: index === 0 ? '#2563EB' : '#64748B', fontSize: 11, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{item.time}</Text>
+              <View style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}>
+                <WeatherIcon name={item.icon} size={38} color={item.iconColor} />
+              </View>
             </View>
-            <Text style={{ color: '#334155', fontSize: 15, fontWeight: '600', marginBottom: 4, fontVariant: ['tabular-nums'] }}>{item.temp}</Text>
-            <Text style={{ color: '#60A5FA', fontSize: 9, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{item.pop}</Text>
-          </View>
-        ))}
-      </ScrollView>
+          ))}
+        </View>
+
+        {contentWidth > 0 && visibleForecast.length > 0 ? (
+          <HourlyTemperatureTrend forecast={visibleForecast} width={contentWidth} />
+        ) : null}
+
+        <View style={{ flexDirection: 'row' }}>
+          {visibleForecast.map((item, index) => (
+            <View key={`${item.time}-pop-${index}`} style={{ flex: 1, alignItems: 'center' }}>
+              <View style={{ backgroundColor: '#EFF6FF', borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 }}>
+                <Text selectable style={{ color: '#2563EB', fontSize: 10, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{item.pop}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
     </SectionCard>
   );
 });
@@ -265,7 +364,7 @@ export const WeeklyForecastSection = memo(function WeeklyForecastSection({ forec
     <SectionCard>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ width: 6, height: 14, backgroundColor: '#3B82F6', borderRadius: 999 }} />
+          <View style={{ width: 3, height: 14, backgroundColor: '#0057D9', borderRadius: 999 }} />
           <Text style={{ color: '#1E293B', fontSize: 15, fontWeight: '600' }}>一週預報</Text>
         </View>
         <View style={{ flexDirection: 'row', backgroundColor: '#F1F5F9', padding: 2, borderRadius: 8 }}>
@@ -284,21 +383,30 @@ export const WeeklyForecastSection = memo(function WeeklyForecastSection({ forec
           const icon = period === 'day' ? item.icon : item.nightIcon;
           const iconColor = period === 'day' ? item.iconColor : item.nightIconColor;
           const pop = period === 'day' ? item.pop : item.nightPop;
+          const min = period === 'day' ? item.dayMin ?? item.min : item.nightMin ?? item.min;
+          const max = period === 'day' ? item.dayMax ?? item.max : item.nightMax ?? item.max;
+          const progressLeft = period === 'day' ? item.dayProgressLeft ?? item.progressLeft : item.nightProgressLeft ?? item.progressLeft;
+          const progressWidth = period === 'day' ? item.dayProgressWidth ?? item.progressWidth : item.nightProgressWidth ?? item.progressWidth;
+          const hasProbability = pop !== '—';
           return (
             <View key={`${item.day}-${index}`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Text style={{ width: 40, color: index === 0 ? '#2563EB' : '#475569', fontSize: 13, fontWeight: '500' }}>{item.day}</Text>
-              <View style={{ width: 72, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text selectable numberOfLines={1} style={{ width: 66, color: index === 0 ? '#2563EB' : '#475569', fontSize: 12, fontWeight: '500' }}>{item.day}</Text>
+              <View accessible accessibilityLabel={hasProbability ? `降雨機率 ${pop}` : '降雨機率未提供'} style={{ width: 72, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
                   <WeatherIcon name={icon} size={32} color={iconColor} />
                 </View>
-                <Text style={{ color: '#60A5FA', fontSize: 10, fontWeight: '500' }}>{pop}</Text>
+                {hasProbability ? (
+                  <View style={{ backgroundColor: '#EFF6FF', borderRadius: 999, paddingHorizontal: 5, paddingVertical: 2 }}>
+                    <Text selectable style={{ color: '#2563EB', fontSize: 10, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{pop}</Text>
+                  </View>
+                ) : null}
               </View>
               <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-                <Text style={{ width: 24, textAlign: 'right', color: '#94A3B8', fontSize: 13, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{item.min}°</Text>
-                <View style={{ width: 80, height: 5, borderRadius: 999, backgroundColor: '#F1F5F9', overflow: 'hidden' }}>
-                  <LinearGradient colors={['#93C5FD', '#FACC15']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ position: 'absolute', left: item.progressLeft, width: item.progressWidth, height: 5, borderRadius: 999 }} />
+                <Text selectable style={{ width: 24, textAlign: 'right', color: '#94A3B8', fontSize: 13, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{min}°</Text>
+                <View style={{ width: 80, height: 5, borderRadius: 999, backgroundColor: '#F1F5F9', boxShadow: '0 0 0 1px #CBD5E1', overflow: 'hidden' }}>
+                  <LinearGradient colors={['#3B82F6', '#EF4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={{ position: 'absolute', left: progressLeft, width: progressWidth, height: 5, borderRadius: 999 }} />
                 </View>
-                <Text style={{ width: 24, textAlign: 'right', color: '#334155', fontSize: 13, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{item.max}°</Text>
+                <Text selectable style={{ width: 24, textAlign: 'right', color: '#334155', fontSize: 13, fontWeight: '500', fontVariant: ['tabular-nums'] }}>{max}°</Text>
               </View>
             </View>
           );

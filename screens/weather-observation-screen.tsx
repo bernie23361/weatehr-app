@@ -2,19 +2,130 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
-import { getMapLibreModule, TaiwanMap } from '@/components/taiwan-map';
+import { getMapLibreModule, TaiwanMap, type MapViewport } from '@/components/taiwan-map';
 import { WeatherIcon } from '@/components/weather-icon';
 import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
+import { resolveFeelsLikeStatus } from '@/data/weather-stat-status';
 import { taiwanHighways } from '@/data/taiwan-highways';
 import { taiwanIslands } from '@/data/taiwan-islands';
 import { unprojectCoordinates } from '@/data/taiwan-map-projection';
 import { RADAR_BOUNDS, radarImageUrl } from '@/config/radar';
-import { TEMPERATURE_BOUNDS, TEMPERATURE_COLOR_STOPS, TEMPERATURE_MAX, TEMPERATURE_MIN, temperatureColor, temperatureGridImageUrl } from '@/config/temperature-grid';
+import { TEMPERATURE_BOUNDS, TEMPERATURE_COLOR_STOPS, TEMPERATURE_GRID_REQUESTS_ENABLED, TEMPERATURE_MAX, TEMPERATURE_MIN, temperatureColor, temperatureGridImageUrl, temperatureGridMetadataUrl } from '@/config/temperature-grid';
 import { weatherApi, type Coordinates, type ObservationStation } from '@/services/weather-api';
 
 type ObservationLayer = 'radar' | 'temperature' | 'rainfall' | 'wind' | 'humidity' | 'visibility' | 'highways';
 
 const layerOrder: ObservationLayer[] = ['radar', 'temperature', 'rainfall', 'wind', 'humidity', 'visibility', 'highways'];
+
+type HighwaySegmentBoundary = {
+  id: string;
+  /** The two endpoints of a short line crossing both carriageways, as [latitude, longitude]. */
+  endpoints: [[number, number], [number, number]];
+};
+
+const HIGHWAY_SEGMENT_BOUNDARIES: HighwaySegmentBoundary[] = [
+  // Add road-section boundaries here after the section list is confirmed.
+  // Example: { id: 'national-1-section-01', endpoints: [[25.05, 121.52], [25.0502, 121.521]] },
+];
+const SHOW_HIGHWAY_SEGMENT_BOUNDARIES = false;
+
+const HIGHWAY_FILL_COLOR = '#9CA3AF';
+const HIGHWAY_BORDER_COLOR = '#4B5563';
+
+type LatitudeLongitude = [number, number];
+
+const coordinateDistanceSquared = (a: LatitudeLongitude, b: LatitudeLongitude) => (
+  (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+);
+
+function resampleRoadLine(points: LatitudeLongitude[], sampleCount: number): LatitudeLongitude[] {
+  if (points.length < 2 || sampleCount < 2) return points;
+  const distances = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    distances.push(distances[index - 1] + Math.sqrt(coordinateDistanceSquared(points[index - 1], points[index])));
+  }
+  const totalDistance = distances[distances.length - 1];
+  if (totalDistance === 0) return Array.from({ length: sampleCount }, () => points[0]);
+
+  let sourceIndex = 1;
+  return Array.from({ length: sampleCount }, (_, sampleIndex) => {
+    const targetDistance = totalDistance * sampleIndex / (sampleCount - 1);
+    while (sourceIndex < distances.length - 1 && distances[sourceIndex] < targetDistance) sourceIndex += 1;
+    const startDistance = distances[sourceIndex - 1];
+    const endDistance = distances[sourceIndex];
+    const progress = (targetDistance - startDistance) / (endDistance - startDistance || 1);
+    const start = points[sourceIndex - 1];
+    const end = points[sourceIndex];
+    return [
+      start[0] + (end[0] - start[0]) * progress,
+      start[1] + (end[1] - start[1]) * progress,
+    ];
+  });
+}
+
+function nearestPointOnRoadSegment(point: LatitudeLongitude, start: LatitudeLongitude, end: LatitudeLongitude) {
+  const deltaLatitude = end[0] - start[0];
+  const deltaLongitude = end[1] - start[1];
+  const lengthSquared = deltaLatitude ** 2 + deltaLongitude ** 2;
+  const projection = lengthSquared === 0 ? 0 : Math.min(1, Math.max(0, (
+    (point[0] - start[0]) * deltaLatitude + (point[1] - start[1]) * deltaLongitude
+  ) / lengthSquared));
+  const nearest: LatitudeLongitude = [
+    start[0] + deltaLatitude * projection,
+    start[1] + deltaLongitude * projection,
+  ];
+  return { nearest, distanceSquared: coordinateDistanceSquared(point, nearest) };
+}
+
+/** Collapse public northbound/southbound traces into one geographic midpoint line. */
+function roadCenterline(segment: LatitudeLongitude[], siblingSegments: LatitudeLongitude[][]): LatitudeLongitude[] {
+  if (segment.length < 6) return segment;
+  const start = segment[0];
+  let turnIndex = 1;
+  let maximumDistance = 0;
+  for (let index = 1; index < segment.length; index += 1) {
+    const distance = coordinateDistanceSquared(start, segment[index]);
+    if (distance > maximumDistance) {
+      maximumDistance = distance;
+      turnIndex = index;
+    }
+  }
+
+  const closesNearStart = coordinateDistanceSquared(start, segment[segment.length - 1]) < maximumDistance * 0.01;
+  if (closesNearStart && turnIndex >= 2 && turnIndex <= segment.length - 3) {
+    const outbound = segment.slice(0, turnIndex + 1);
+    const inbound = segment.slice(turnIndex).reverse();
+    const sampleCount = Math.min(320, Math.max(outbound.length, inbound.length));
+    const outboundSamples = resampleRoadLine(outbound, sampleCount);
+    const inboundSamples = resampleRoadLine(inbound, sampleCount);
+    return outboundSamples.map((point, index) => ([
+      (point[0] + inboundSamples[index][0]) / 2,
+      (point[1] + inboundSamples[index][1]) / 2,
+    ]));
+  }
+
+  // Many routes store the two directions as separate open segments. Project
+  // every point onto the nearest sibling trace and use their exact midpoint.
+  const maximumPairDistanceSquared = 0.0008 ** 2;
+  return segment.map((point) => {
+    let closestPoint: LatitudeLongitude | undefined;
+    let closestDistanceSquared = maximumPairDistanceSquared;
+    for (const sibling of siblingSegments) {
+      if (sibling === segment) continue;
+      for (let index = 1; index < sibling.length; index += 1) {
+        const candidate = nearestPointOnRoadSegment(point, sibling[index - 1], sibling[index]);
+        if (candidate.distanceSquared < closestDistanceSquared) {
+          closestPoint = candidate.nearest;
+          closestDistanceSquared = candidate.distanceSquared;
+        }
+      }
+    }
+    return closestPoint ? [
+      (point[0] + closestPoint[0]) / 2,
+      (point[1] + closestPoint[1]) / 2,
+    ] : point;
+  });
+}
 
 const temperatureGradientStops: ColorStop[] = TEMPERATURE_COLOR_STOPS
   .filter((stop, index, stops) => index === 0 || stop.color !== stops[index - 1].color)
@@ -140,7 +251,7 @@ const lerpColor = (colorA: string, colorB: string, progress: number): string => 
   const a = hexToRgb(colorA);
   const b = hexToRgb(colorB);
   const channel = (index: number) => Math.round(a[index] + (b[index] - a[index]) * progress);
-  return `#${[channel(0), channel(1), channel(2)].map((value) => pad(value)).join('')}`;
+  return `#${[channel(0), channel(1), channel(2)].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 };
 
 function stationLayerValue(station: ObservationStation, layer: ObservationLayer): number | null {
@@ -187,6 +298,9 @@ const DEFAULT_ANCHOR: Coordinates = { latitude: 24.1469, longitude: 120.6839 };
 const OBSERVATION_INITIAL_BOUNDS: [number, number, number, number] = [119.0, 21.75, 122.1, 25.55];
 const OBSERVATION_INITIAL_PADDING = { top: 18, right: 28, bottom: 28, left: 10 };
 const TEMPERATURE_MASK_PADDING = 0.08;
+const TEMPERATURE_STATION_LABEL_SHOW_ZOOM = 9.6;
+const TEMPERATURE_STATION_LABEL_HIDE_ZOOM = 9.1;
+const TEMPERATURE_STATION_VIEWPORT_PADDING = 0.12;
 
 const GPS_LOCATION_PATH = 'M2.89945 2.29983L21.7052 8.56842C21.9672 8.65574 22.1088 8.93891 22.0215 9.20088C21.975 9.3404 21.8694 9.45238 21.7328 9.507L13.0002 13.0001L8.57501 21.8504C8.45151 22.0974 8.15118 22.1975 7.90419 22.074C7.77883 22.0113 7.68553 21.8989 7.64703 21.7641L2.26058 2.91153C2.18472 2.64601 2.33846 2.36927 2.60398 2.29341C2.70087 2.26573 2.80386 2.26796 2.89945 2.29983Z';
 const GPS_LOCATION_SIZE = 13;
@@ -263,23 +377,22 @@ interface WeatherObservationScreenProps {
 export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObservationScreenProps) {
   const [stations, setStations] = useState<ObservationStation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [layer, setLayer] = useState<ObservationLayer>('temperature');
   const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [now, setNow] = useState(() => new Date());
+  const [isStationPanelVisible, setIsStationPanelVisible] = useState(true);
+  const [temperatureObservedAt, setTemperatureObservedAt] = useState('');
+  const [showTemperatureLabels, setShowTemperatureLabels] = useState(false);
+  const [visibleMapBounds, setVisibleMapBounds] = useState<MapViewport['bounds']>();
 
   const anchorPoint = anchor ?? DEFAULT_ANCHOR;
 
   const loadStations = useCallback(async () => {
-    setLoadError(false);
     try {
       const result = await weatherApi.getObservationStations();
       if (!result) return;
       setStations(result);
     } catch {
-      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -287,11 +400,40 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
 
   useEffect(() => {
     void loadStations();
+    const refreshTimer = setInterval(() => void loadStations(), 5 * 60 * 1000);
+    return () => clearInterval(refreshTimer);
   }, [loadStations]);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
+    if (!TEMPERATURE_GRID_REQUESTS_ENABLED) return undefined;
+
+    const controller = new AbortController();
+    const loadTemperatureMetadata = async () => {
+      try {
+        const response = await fetch(temperatureGridMetadataUrl(), { signal: controller.signal });
+        if (!response.ok) return;
+        const payload: unknown = await response.json();
+        if (
+          typeof payload === 'object'
+          && payload !== null
+          && 'time' in payload
+          && typeof payload.time === 'string'
+          && Number.isFinite(Date.parse(payload.time))
+        ) {
+          setTemperatureObservedAt(payload.time);
+        }
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) {
+          console.warn('Failed to load temperature Worker metadata');
+        }
+      }
+    };
+    void loadTemperatureMetadata();
+    const timer = setInterval(() => void loadTemperatureMetadata(), 10 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
   }, []);
 
   const withCoordinates = useMemo(() => stations.filter((station) => station.latitude != null && station.longitude != null), [stations]);
@@ -308,21 +450,42 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
     }, { station: withCoordinates[0], distance: Infinity }).station;
   }, [anchorPoint, selectedId, stations, withCoordinates]);
 
-  const selectedDistance = useMemo(() => {
-    if (!selected) return undefined;
-    return distanceKm(anchorPoint.latitude, anchorPoint.longitude, selected.latitude!, selected.longitude!);
-  }, [anchorPoint, selected]);
-
-  const sortedByDistance = useMemo(() => withCoordinates
-    .map((station) => ({
-      station,
-      distance: distanceKm(anchorPoint.latitude, anchorPoint.longitude, station.latitude!, station.longitude!),
-    }))
-    .sort((a, b) => a.distance - b.distance), [anchorPoint, withCoordinates]);
-
   const radarUrl = useMemo(() => radarImageUrl(), []);
 
-  const temperatureGridUrl = useMemo(() => temperatureGridImageUrl(), []);
+  const dataVersion = temperatureObservedAt;
+
+  const observationDate = useMemo(() => {
+    const observedAt = layer === 'temperature' && dataVersion ? dataVersion : selected?.observedAt;
+    if (!observedAt) return null;
+    const date = new Date(observedAt);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }, [dataVersion, layer, selected?.observedAt]);
+
+  const temperatureGridUrl = useMemo(() => (
+    TEMPERATURE_GRID_REQUESTS_ENABLED ? temperatureGridImageUrl() : null
+  ), []);
+  const visibleTemperatureStations = useMemo(() => {
+    if (!visibleMapBounds) return [];
+    const [west, south, east, north] = visibleMapBounds;
+    const longitudePadding = (east - west) * TEMPERATURE_STATION_VIEWPORT_PADDING;
+    const latitudePadding = (north - south) * TEMPERATURE_STATION_VIEWPORT_PADDING;
+    return withCoordinates.filter((station) => (
+      station.temperature != null
+      && station.longitude! >= west - longitudePadding
+      && station.longitude! <= east + longitudePadding
+      && station.latitude! >= south - latitudePadding
+      && station.latitude! <= north + latitudePadding
+    ));
+  }, [visibleMapBounds, withCoordinates]);
+
+  const handleMapRegionDidChange = useCallback(({ zoom, bounds }: MapViewport) => {
+    setVisibleMapBounds(bounds);
+    setShowTemperatureLabels((visible) => {
+      if (zoom >= TEMPERATURE_STATION_LABEL_SHOW_ZOOM) return true;
+      if (zoom <= TEMPERATURE_STATION_LABEL_HIDE_ZOOM) return false;
+      return visible;
+    });
+  }, []);
 
   const stationGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
     type: 'FeatureCollection',
@@ -346,18 +509,34 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
 
   const highwayGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
     type: 'FeatureCollection',
-    features: taiwanHighways.flatMap((route) => route.segments.map((segment, index) => ({
+    features: taiwanHighways.filter((route) => route.type === 'national').flatMap((route) => route.segments.map((segment, index) => ({
       type: 'Feature',
       geometry: {
         type: 'LineString',
-        coordinates: segment.map(([latitude, longitude]) => [longitude, latitude]),
+        coordinates: roadCenterline(segment, route.segments).map(([latitude, longitude]) => [longitude, latitude]),
       },
       properties: { type: route.type, label: route.label, routeId: route.id, segmentIndex: index },
     }))),
   }), []);
 
-  const dateText = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const timeText = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const highwaySegmentBoundaryGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: HIGHWAY_SEGMENT_BOUNDARIES.map((boundary) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: boundary.endpoints.map(([latitude, longitude]) => [longitude, latitude]),
+      },
+      properties: { boundaryId: boundary.id },
+    })),
+  }), []);
+
+  const dateText = observationDate
+    ? `${observationDate.getFullYear()}-${pad(observationDate.getMonth() + 1)}-${pad(observationDate.getDate())}`
+    : '---- -- --';
+  const timeText = observationDate
+    ? `${pad(observationDate.getHours())}:${pad(observationDate.getMinutes())}:${pad(observationDate.getSeconds())}`
+    : '--:--:--';
 
   const overlay = useMemo(() => (
     () => {
@@ -416,11 +595,57 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
       {layer === 'highways' ? (
         <GeoJSONSource key="highways-source" id="highways-source" data={highwayGeoJson}>
           <Layer
-            id="national-highways"
+            id="national-highways-border"
             type="line"
             filter={['==', ['get', 'type'], 'national']}
-            paint={{ 'line-color': '#374151', 'line-width': 2.2, 'line-opacity': 0.92 }}
+            paint={{
+              'line-color': HIGHWAY_BORDER_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 4.8, 16, 9],
+              'line-opacity': 0.96,
+            }}
             layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          />
+          <Layer
+            id="national-highways-left-fill"
+            type="line"
+            filter={['==', ['get', 'type'], 'national']}
+            paint={{
+              'line-color': HIGHWAY_FILL_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.7, 16, 3.6],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1, 16, -2],
+              'line-opacity': 1,
+            }}
+            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          />
+          <Layer
+            id="national-highways-right-fill"
+            type="line"
+            filter={['==', ['get', 'type'], 'national']}
+            paint={{
+              'line-color': HIGHWAY_FILL_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.7, 16, 3.6],
+              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1, 16, 2],
+              'line-opacity': 1,
+            }}
+            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+          />
+        </GeoJSONSource>
+      ) : null}
+      {layer === 'highways' ? (
+        <GeoJSONSource
+          key="highway-segment-boundaries-source"
+          id="highway-segment-boundaries-source"
+          data={highwaySegmentBoundaryGeoJson}
+        >
+          <Layer
+            id="highway-segment-boundaries"
+            type="line"
+            layout={{
+              visibility: SHOW_HIGHWAY_SEGMENT_BOUNDARIES ? 'visible' : 'none',
+              'line-cap': 'butt',
+              'line-join': 'round',
+            }}
+            paint={{ 'line-color': HIGHWAY_BORDER_COLOR, 'line-width': 1.4, 'line-opacity': 0.95 }}
           />
         </GeoJSONSource>
       ) : null}
@@ -430,31 +655,47 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
         data={stationGeoJson}
         onPress={(event: any) => {
           const stationId = event.nativeEvent.features[0]?.properties?.stationId;
-          if (typeof stationId === 'string') setSelectedId(stationId);
+          if (typeof stationId === 'string') {
+            setSelectedId(stationId);
+            setIsStationPanelVisible(true);
+          }
         }}
       >
-        <Layer
-          id="station-points"
-          type="circle"
-          paint={{
-            'circle-radius': ['get', 'radius'],
-            'circle-color': ['get', 'color'],
-            'circle-opacity': ['get', 'opacity'],
-            'circle-stroke-color': '#FFFFFF',
-            'circle-stroke-width': ['get', 'strokeWidth'],
-          }}
-        />
+        {layer === 'temperature' ? null : (
+          <Layer
+            id="station-points"
+            type="circle"
+            afterId="town-outline"
+            paint={{
+              'circle-radius': ['get', 'radius'],
+              'circle-color': ['get', 'color'],
+              'circle-opacity': ['get', 'opacity'],
+              'circle-stroke-color': '#FFFFFF',
+              'circle-stroke-width': ['get', 'strokeWidth'],
+            }}
+          />
+        )}
       </GeoJSONSource>
         </>
       );
     }
-  )(), [highwayGeoJson, layer, radarUrl, stationGeoJson, temperatureGridUrl]);
+  )(), [highwayGeoJson, highwaySegmentBoundaryGeoJson, layer, radarUrl, stationGeoJson, temperatureGridUrl]);
 
   return (
     <View style={{ flex: 1, overflow: 'hidden', backgroundColor: '#E8F0F8' }}>
-      <TaiwanMap allowTap initialBounds={OBSERVATION_INITIAL_BOUNDS} initialPadding={OBSERVATION_INITIAL_PADDING}>
+      <TaiwanMap allowTap initialBounds={OBSERVATION_INITIAL_BOUNDS} initialPadding={OBSERVATION_INITIAL_PADDING} onRegionDidChange={handleMapRegionDidChange}>
         <GpsLocationMarker lngLat={[anchorPoint.longitude, anchorPoint.latitude]} size={GPS_LOCATION_SIZE} />
         {overlay}
+        {layer === 'temperature' && showTemperatureLabels ? (
+          <TemperatureStationLabels
+            stations={visibleTemperatureStations}
+            selectedId={selected?.stationId}
+            onSelect={(stationId) => {
+              setSelectedId(stationId);
+              setIsStationPanelVisible(true);
+            }}
+          />
+        ) : null}
       </TaiwanMap>
 
       <View pointerEvents="none" style={{ position: 'absolute', top: 14, left: 16 }}>
@@ -463,6 +704,11 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
           <Text style={{ color: '#1E293B', fontSize: 16, lineHeight: 20, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: 0.2 }}>{dateText}</Text>
           <Text style={{ color: '#1E293B', fontSize: 16, lineHeight: 20, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: 0.2 }}>{timeText}</Text>
         </View>
+        {layer === 'temperature' ? (
+          <Text style={{ color: '#64748B', fontSize: 10, lineHeight: 14, fontWeight: '600', marginTop: 2 }}>
+            {temperatureGridUrl && stations.length ? '格點與測站觀測' : temperatureGridUrl ? '格點觀測' : '測站觀測'}
+          </Text>
+        ) : null}
       </View>
 
       <View style={{ position: 'absolute', top: 14, right: 16, zIndex: 30, alignItems: 'flex-end' }}>
@@ -568,30 +814,29 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
         </View>
       ) : null}
 
-      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 114 + bottomInset, zIndex: 20 }}>
-        <PanelShell>
-          {loading ? (
+      {(loading || (selected && isStationPanelVisible)) ? (
+        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 114 + bottomInset, zIndex: 20 }}>
+          <PanelShell>
+            {loading ? (
             <View style={{ height: 52, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 10 }}>
               <ActivityIndicator color="#94A3B8" />
               <Text style={{ color: '#94A3B8', fontSize: 13, fontWeight: '600' }}>載入測站資料中…</Text>
             </View>
-          ) : loadError || !selected ? null : panelOpen ? (
-            <StationDetail station={selected} distance={selectedDistance} layer={layer} onCollapse={() => setPanelOpen(false)} onSelect={setSelectedId} nearby={sortedByDistance.slice(0, 12)} selectedId={selected.stationId} />
-          ) : (
-            <Pressable onPress={() => setPanelOpen(true)} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 9, opacity: pressed ? 0.7 : 1 })}>
+            ) : selected ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 9 }}>
               <View style={{ width: 12, height: 12, borderRadius: 999, backgroundColor: primaryValue(selected, layer) != null ? layerColor(layer, primaryValue(selected, layer)) : '#CBD5E1', borderWidth: 2, borderColor: '#FFFFFF' }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#1E293B', fontSize: 14, fontWeight: '700' }}>{selected.stationName}</Text>
-                <Text style={{ color: '#94A3B8', fontSize: 11, marginTop: 1 }}>{selected.county}{selected.town} · {formatObservedAt(selected.observedAt)} 觀測</Text>
+                <Text style={{ color: '#94A3B8', fontSize: 11, marginTop: 1 }}>{selected.county}{selected.town}</Text>
               </View>
               <Text style={{ color: '#334155', fontSize: 24, fontWeight: '700', fontVariant: ['tabular-nums'] }}>
                 {primaryValue(selected, layer) != null ? Math.round(primaryValue(selected, layer)!) : '--'}<Text style={{ color: '#94A3B8', fontSize: 11, fontWeight: '500' }}>{primaryUnit(layer)}</Text>
               </Text>
-              <WeatherIcon name="x" size={16} color="#94A3B8" style={{ transform: [{ rotate: '90deg' }] }} />
-            </Pressable>
-          )}
-        </PanelShell>
-      </View>
+            </View>
+            ) : null}
+          </PanelShell>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -617,9 +862,57 @@ function GpsLocationMarker({ lngLat, size }: { lngLat: [number, number]; size: n
   );
 }
 
+function TemperatureStationLabels({
+  stations,
+  selectedId,
+  onSelect,
+}: {
+  stations: ObservationStation[];
+  selectedId?: string;
+  onSelect: (stationId: string) => void;
+}) {
+  const mapLibre = getMapLibreModule();
+  if (!mapLibre) return null;
+
+  const { Marker } = mapLibre;
+
+  return (
+    <>
+      {stations.map((station) => {
+        if (station.latitude == null || station.longitude == null || station.temperature == null) return null;
+        const selected = station.stationId === selectedId;
+        const status = resolveFeelsLikeStatus(`${Math.round(station.temperature)}°`);
+        return (
+          <Marker key={`temperature-${station.stationId}`} id={`temperature-${station.stationId}`} lngLat={[station.longitude, station.latitude]} anchor="center">
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${station.stationName} ${Math.round(station.temperature)}度`}
+              onPress={() => onSelect(station.stationId)}
+              style={({ pressed }) => ({
+                paddingHorizontal: 10,
+                paddingVertical: 2,
+                borderRadius: 999,
+                backgroundColor: status.badgeBg,
+                borderWidth: selected ? 2 : 1,
+                borderColor: status.badgeText,
+                opacity: pressed ? 0.72 : 1,
+                boxShadow: selected ? '0 3px 9px rgba(15,23,42,0.18)' : '0 1px 3px rgba(15,23,42,0.10)',
+              })}
+            >
+              <Text style={{ color: status.badgeText, fontSize: 9, lineHeight: 12, fontWeight: '500', fontVariant: ['tabular-nums'] }}>
+                {Math.round(station.temperature)}°
+              </Text>
+            </Pressable>
+          </Marker>
+        );
+      })}
+    </>
+  );
+}
+
 function PanelShell({ children }: { children: ReactNode }) {
   return (
-    <View style={{ marginHorizontal: 12, borderRadius: 24, borderCurve: 'continuous', backgroundColor: '#FFFFFF', boxShadow: '0 -10px 30px rgba(0,0,0,0.14)', overflow: 'hidden' }}>
+    <View style={{ marginHorizontal: 12, borderRadius: 16, borderCurve: 'continuous', backgroundColor: '#FFFFFF', boxShadow: '0 -10px 30px rgba(0,0,0,0.14)', overflow: 'hidden' }}>
       {children}
     </View>
   );

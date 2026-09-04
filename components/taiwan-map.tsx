@@ -8,6 +8,11 @@ const TAIWAN_BOUNDS: [number, number, number, number] = [118.15, 21.87, 122.05, 
 type MapBounds = [number, number, number, number];
 type MapPadding = { top: number; right: number; bottom: number; left: number };
 
+export interface MapViewport {
+  zoom: number;
+  bounds: MapBounds;
+}
+
 type MapLibreModule = typeof import('@maplibre/maplibre-react-native');
 
 let mapLibreModule: MapLibreModule | null | undefined;
@@ -29,6 +34,7 @@ export function getMapLibreModule(): MapLibreModule | null {
 
 const mapStyle = {
   version: 8,
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   sources: {
     exptech: {
       type: 'vector',
@@ -76,9 +82,10 @@ interface TaiwanMapProps {
   children?: ReactNode;
   initialBounds?: MapBounds;
   initialPadding?: MapPadding;
+  onRegionDidChange?: (viewport: MapViewport) => void;
 }
 
-export function TaiwanMap({ children, initialBounds = TAIWAN_BOUNDS, initialPadding = { top: 24, right: 20, bottom: 24, left: 20 } }: TaiwanMapProps) {
+export function TaiwanMap({ children, initialBounds = TAIWAN_BOUNDS, initialPadding = { top: 24, right: 20, bottom: 24, left: 20 }, onRegionDidChange }: TaiwanMapProps) {
   const mapLibre = getMapLibreModule();
 
   if (!mapLibre) {
@@ -100,6 +107,10 @@ export function TaiwanMap({ children, initialBounds = TAIWAN_BOUNDS, initialPadd
       logo={false}
       attribution
       attributionPosition={{ bottom: 8, right: 8 }}
+      onRegionDidChange={(event) => onRegionDidChange?.({
+        zoom: event.nativeEvent.zoom,
+        bounds: event.nativeEvent.bounds,
+      })}
     >
       <Camera
         minZoom={4}

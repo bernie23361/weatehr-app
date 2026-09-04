@@ -15,7 +15,7 @@ export function SectionCard({ children, paddingBottom = 24 }: PropsWithChildren<
 export function SectionHeading({ children }: PropsWithChildren) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-      <View style={{ width: 6, height: 14, backgroundColor: '#3B82F6', borderRadius: 999 }} />
+      <View style={{ width: 3, height: 14, backgroundColor: '#0057D9', borderRadius: 999 }} />
       <Text style={{ color: '#1E293B', fontSize: 15, fontWeight: '600' }}>{children}</Text>
     </View>
   );

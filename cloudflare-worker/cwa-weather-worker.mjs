@@ -131,7 +131,13 @@ const selectStation = (stations,city,district) => {
     ??valid[0];
 };
 
-const forecastLocations = data => data?.records?.locations?.[0]?.location??data?.records?.Locations?.[0]?.Location??[];
+const asArray = value => Array.isArray(value)?value:value?[value]:[];
+const weeklyForecastLocationGroupsV2 = data => asArray(data?.records?.locations??data?.records?.Locations);
+const forecastLocations = data => {
+  const group=weeklyForecastLocationGroupsV2(data)[0];
+  return asArray(group?.location??group?.Location);
+};
+const forecastGroupName = group => normalizeCity(String(group?.locationsName??group?.LocationsName??''));
 const forecastLocationName = location => String(location?.locationName??location?.LocationName??'');
 const selectForecastLocation = (data,district) => {
   const locations=forecastLocations(data);
@@ -143,18 +149,30 @@ const selectForecastLocation = (data,district) => {
     ??locations[0];
 };
 
-const elementTimes = (location,name) => {
-  const elements=location?.weatherElement??location?.WeatherElement??[];
-  const element=elements.find(item=>(item?.elementName??item?.ElementName)===name);
-  return element?.time??element?.Time??[];
+const elementTimes = (location,...names) => {
+  const elements=asArray(location?.weatherElement??location?.WeatherElement);
+  const element=elements.find(item=>names.includes(item?.elementName??item?.ElementName));
+  return asArray(element?.time??element?.Time);
 };
-const elementValues = item => item?.elementValue??item?.ElementValue??[];
-const valueFrom = item => elementValues(item)[0]?.value??elementValues(item)[0]?.Value;
+const elementValues = item => asArray(item?.elementValue??item?.ElementValue);
+const scalarValues = entry => Object.values(entry??{}).filter(value=>typeof value==='string'||typeof value==='number');
+const valueFrom = item => {
+  const entry=elementValues(item)[0];
+  return entry?.value??entry?.Value??scalarValues(entry)[0];
+};
 const weatherCodeFrom = item => {
-  const coded=elementValues(item).find(entry=>/^\d+$/.test(String(entry?.value??entry?.Value??'')));
-  return coded?Number(coded.value??coded.Value):undefined;
+  for(const entry of elementValues(item)){
+    const explicit=entry?.weatherCode??entry?.WeatherCode;
+    if(/^\d+$/.test(String(explicit??''))) return Number(explicit);
+    const coded=scalarValues(entry).find(value=>/^\d+$/.test(String(value)));
+    if(coded!==undefined) return Number(coded);
+  }
+  return undefined;
 };
-const parseForecastTime = value => Date.parse(String(value).replace(' ','T')+'+08:00');
+const parseForecastTime = value => {
+  const normalized=String(value??'').replace(' ','T');
+  return Date.parse(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized)?normalized:`${normalized}+08:00`);
+};
 const startTimeOf = item => item?.startTime??item?.StartTime;
 const endTimeOf = item => item?.endTime??item?.EndTime;
 const activeOrNext = times => {
@@ -224,6 +242,88 @@ const buildHourly = (location,current,daylight,sunrise,sunset) => {
     result.push({time:`${String(clock.hour).padStart(2,'0')}:00`,temp:`${Math.round(finiteNumber(valueFrom(temperature),current.temperature))}°`,pop:`${Math.round(finiteNumber(valueFrom(pop),0))}%`,status:decoded.status,icon:decoded.icon});
   }
   return result;
+};
+
+const dateOfForecastTime = value => String(value??'').slice(0,10);
+const hourOfForecastTime = value => Number(String(value??'').slice(11,13));
+const sortedFutureTimes = times => times.filter(item=>parseForecastTime(endTimeOf(item))>Date.now()).sort((a,b)=>parseForecastTime(startTimeOf(a))-parseForecastTime(startTimeOf(b)));
+
+const buildWeekly = location => {
+  const weather=sortedFutureTimes(elementTimes(location,'Wx','天氣現象'));
+  const pops=sortedFutureTimes(elementTimes(location,'PoP12h','12小時降雨機率'));
+  const minimums=sortedFutureTimes(elementTimes(location,'MinT','最低溫度'));
+  const maximums=sortedFutureTimes(elementTimes(location,'MaxT','最高溫度'));
+  const today=taipeiParts(new Date()).date;
+  const dates=[...new Set([...weather,...minimums,...maximums].map(item=>dateOfForecastTime(startTimeOf(item))).filter(date=>date>=today))].slice(0,7);
+  const intervalFor=(times,date,period)=>times.find(item=>{
+    const hour=hourOfForecastTime(startTimeOf(item));
+    return dateOfForecastTime(startTimeOf(item))===date&&(period==='day'?hour>=6&&hour<18:hour>=18||hour<6);
+  });
+  const valueForDate=(times,date,fallback)=>{
+    const values=times.filter(item=>dateOfForecastTime(startTimeOf(item))===date).map(item=>finiteNumber(valueFrom(item),undefined)).filter(value=>value!==undefined);
+    return values.length?(fallback==='min'?Math.min(...values):Math.max(...values)):undefined;
+  };
+  const periodData=(date,period)=>{
+    const wx=intervalFor(weather,date,period);
+    const pop=intervalFor(pops,date,period);
+    const periodMin=intervalFor(minimums,date,period);
+    const periodMax=intervalFor(maximums,date,period);
+    if(!wx&&!pop&&!periodMin&&!periodMax) return undefined;
+    const code=weatherCodeFrom(wx)??4;
+    const min=finiteNumber(valueFrom(periodMin),undefined);
+    const max=finiteNumber(valueFrom(periodMax),undefined);
+    return {
+      status:decodeWeather(code,period==='day').status,
+      weatherCode:code,
+      pop:pop?Math.round(finiteNumber(valueFrom(pop),0)):null,
+      ...(min===undefined?{}:{min}),
+      ...(max===undefined?{}:{max}),
+    };
+  };
+  return dates.map(date=>{
+    const min=valueForDate(minimums,date,'min');
+    const max=valueForDate(maximums,date,'max');
+    const temperatureValues=[...minimums,...maximums].filter(item=>dateOfForecastTime(startTimeOf(item))===date).map(item=>finiteNumber(valueFrom(item),undefined)).filter(value=>value!==undefined);
+    return {date,day:periodData(date,'day'),night:periodData(date,'night'),min:min??Math.min(...temperatureValues),max:max??Math.max(...temperatureValues)};
+  }).filter(item=>Number.isFinite(item.min)&&Number.isFinite(item.max));
+};
+
+const handleWeeklyForecast = async (request,env,ctx) => {
+  if(!env.CWA_API_KEY) return jsonResponse({error:{code:'CONFIGURATION_ERROR',message:'Worker 尚未設定 CWA_API_KEY Secret'}},500);
+  const requestUrl=new URL(request.url);
+  const city=normalizeCity(requestUrl.searchParams.get('city')??'臺中市');
+  const district=(requestUrl.searchParams.get('district')??'北區').trim();
+  if(!city||!district||city.length>12||district.length>12) return jsonResponse({error:{code:'INVALID_LOCATION',message:'縣市或鄉鎮市區格式錯誤'}},400);
+  const cacheUrl=new URL('/weather/weekly',requestUrl.origin);
+  cacheUrl.searchParams.set('city',city);
+  cacheUrl.searchParams.set('district',district);
+  const cacheKey=new Request(cacheUrl,{method:'GET'});
+  const cached=await caches.default.match(cacheKey);
+  if(cached){const response=new Response(cached.body,cached);response.headers.set('X-Worker-Cache','HIT');return response;}
+  try{
+    const data=await fetchCwa('F-D0047-091',env.CWA_API_KEY,{
+      LocationName:city,
+      ElementName:'天氣現象,12小時降雨機率,最低溫度,最高溫度',
+    });
+    const groups=weeklyForecastLocationGroupsV2(data);
+    const locations=groups.flatMap(group=>asArray(group?.location??group?.Location));
+    const normalizedCity=normalizeCity(city);
+    const location=locations.find(item=>normalizeCity(forecastLocationName(item))===normalizedCity)
+      ??locations.find(item=>{
+        const name=normalizeCity(forecastLocationName(item));
+        return Boolean(name)&&(normalizedCity.includes(name)||name.includes(normalizedCity));
+      });
+    if(!location) throw new Error('找不到指定縣市的一週預報');
+    const weekly=buildWeekly(location);
+    if(!weekly.length) throw new Error('一週預報沒有可用時段');
+    const payload={ok:true,location:{city,scope:'county'},weekly,metadata:{source:'中央氣象署開放資料',datasetId:'F-D0047-091',cacheTtlSeconds:CACHE_TTL_SECONDS}};
+    const response=jsonResponse(payload,200,{'Cache-Control':`public, max-age=${CACHE_TTL_SECONDS}`,'X-Worker-Cache':'MISS'});
+    ctx.waitUntil(caches.default.put(cacheKey,response.clone()));
+    return response;
+  }catch(error){
+    console.error(JSON.stringify({event:'cwa_weekly_error',city,district,message:error instanceof Error?error.message:String(error)}));
+    return jsonResponse({error:{code:'UPSTREAM_ERROR',message:'目前無法取得中央氣象署一週預報，請稍後再試',details:error instanceof Error?error.message:String(error)}},502);
+  }
 };
 
 const handleCurrentWeather = async (request,env,ctx) => {
@@ -370,6 +470,7 @@ export default {
     if(request.method!=='GET') return jsonResponse({error:{code:'METHOD_NOT_ALLOWED',message:'僅支援 GET'}},405,{Allow:'GET, OPTIONS'});
     const {pathname}=new URL(request.url);
     if(pathname==='/'||pathname==='/weather/current') return handleCurrentWeather(request,env,ctx);
+    if(pathname==='/weather/weekly') return handleWeeklyForecast(request,env,ctx);
     if(pathname==='/weather/observation') return handleObservation(request,env,ctx);
     if(pathname==='/air-quality') return handleAirQuality(request,env,ctx);
     if(pathname==='/health') return jsonResponse({ok:true,service:'cwa-weather-worker'});

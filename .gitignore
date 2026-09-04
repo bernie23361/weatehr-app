@@ -43,3 +43,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# generated temperature artifacts
+/artifacts/
+
+# local Worker source backups
+/cloudflare-worker/*.original-backup.mjs

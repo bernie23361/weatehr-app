@@ -8,6 +8,7 @@ import { WebAlertToast } from '@/components/overlays/web-alert-toast';
 import { FavoritesSidebar } from '@/components/overlays/favorites-sidebar';
 import { SceneQualityModal } from '@/components/overlays/scene-quality-modal';
 import { BottomNavigation } from '@/components/bottom-navigation';
+import { DisasterAmbientGlow } from '@/components/disaster-ambient-glow';
 import { TopHeader } from '@/components/top-header';
 import { WeatherIcon } from '@/components/weather-icon';
 import { DisasterPreparednessScreen } from '@/screens/disaster-preparedness-screen';
@@ -20,11 +21,12 @@ import { SettingsScreen } from '@/screens/settings-screen';
 import { WeatherObservationScreen } from '@/screens/weather-observation-screen';
 import { AstroSection, HourlyForecastSection, LifeSuggestionsSection, WeatherCard, WeeklyForecastSection } from '@/components/weather-sections';
 import { initialAppData, initialHourlyForecast, initialLifeSuggestions, initialWeeklyForecast, pageTitles } from '@/data/weather-data';
-import { ENABLE_ALERT_ENTRY, ENABLE_IWESR } from '@/config/features';
+import { ENABLE_ALERT_ENTRY, ENABLE_DISASTER_VISUAL_STATE, ENABLE_IWESR } from '@/config/features';
 import { weatherApi, type CurrentWeatherObservation } from '@/services/weather-api';
 import { getCurrentTaiwanLocation, LocationServiceError } from '@/services/location-service';
 import { subscribeToAlertResponses } from '@/services/notification-service';
 import { defaultAppSettings, loadAppSettings, saveAppSettings, type AppSettings } from '@/services/app-settings';
+import { loadFavoriteLocations, saveFavoriteLocations } from '@/services/favorite-locations';
 import { setThemeRuntimeDark } from '@/services/theme-runtime';
 import { weatherObservationToSceneInput } from '@/src/weather-scene/adapters/weather-observation-to-scene-input';
 import type { SceneQualityPreference } from '@/src/weather-scene/types';
@@ -59,6 +61,26 @@ export function WeatherHomeScreen() {
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [systemReducedMotion, setSystemReducedMotion] = useState(false);
+  useEffect(() => {
+    const getAutoPeriod = (): WeeklyPeriod => {
+      const h = new Date().getHours();
+      return h >= 6 && h < 18 ? 'day' : 'night';
+    };
+
+    setWeeklyTab(getAutoPeriod());
+
+    let lastAuto = getAutoPeriod();
+    const id = setInterval(() => {
+      const auto = getAutoPeriod();
+      if (auto !== lastAuto) {
+        lastAuto = auto;
+        setWeeklyTab(auto);
+      }
+    }, 30000);
+
+    return () => clearInterval(id);
+  }, []);
+
   const weatherRequestId = useRef(0);
   const lastWeatherUpdateAt = useRef(0);
   const weatherTarget = useRef({
@@ -78,6 +100,11 @@ export function WeatherHomeScreen() {
       }));
       setWeatherObservation(current.observation);
       if (current.hourly?.length) setHourlyForecast(current.hourly);
+      void weatherApi.getWeeklyForecast(location).then((weekly) => {
+        if (weekly?.length && requestId === weatherRequestId.current) setWeeklyForecast(weekly);
+      }).catch(() => {
+        // 一週預報暫時失敗時保留上一筆資料，不影響即時天氣。
+      });
       void weatherApi.getAQI(current.observation).then((aqi) => {
         if (!aqi || requestId !== weatherRequestId.current) return;
         setAppData((previous) => ({ ...previous, aqi: { ...previous.aqi, ...aqi } }));
@@ -94,9 +121,9 @@ export function WeatherHomeScreen() {
 
   const fetchApiData = useCallback(async () => {
     try {
-      const [srdi, astro, alerts, weekly, suggestions] = await Promise.all([
+      const [srdi, astro, alerts, suggestions] = await Promise.all([
         weatherApi.getSRDI(), weatherApi.getAstroData(),
-        weatherApi.getAlerts(), weatherApi.getWeeklyForecast(), weatherApi.getLifeSuggestions(),
+        weatherApi.getAlerts(), weatherApi.getLifeSuggestions(),
       ]);
       if (srdi || astro || alerts) {
         setAppData((previous) => ({
@@ -106,7 +133,6 @@ export function WeatherHomeScreen() {
           alerts: { ...previous.alerts, ...alerts },
         }));
       }
-      if (weekly) setWeeklyForecast(weekly);
       if (suggestions) setLifeSuggestions(suggestions);
     } catch (error) {
       // 預留 API 尚未啟用時保留目前畫面資料。
@@ -133,6 +159,10 @@ export function WeatherHomeScreen() {
       setAppSettings(settings);
       setSettingsLoaded(true);
     });
+  }, []);
+
+  useEffect(() => {
+    void loadFavoriteLocations().then(setFavoriteLocations);
   }, []);
 
   useEffect(() => {
@@ -173,6 +203,7 @@ export function WeatherHomeScreen() {
   }, [appData.alerts.content, appData.alerts.hasActiveAlarm, appData.alerts.title]);
 
   const reducedMotion = systemReducedMotion || appSettings.reduceMotion;
+  const isDisasterVisualActive = ENABLE_DISASTER_VISUAL_STATE;
   const dark = appSettings.appearanceMode === 'dark';
   setThemeRuntimeDark(dark);
   const sceneInput = useMemo(() => ENABLE_IWESR && weatherObservation ? weatherObservationToSceneInput(weatherObservation, appData, sceneQualityPreference, reducedMotion) : undefined, [appData, reducedMotion, sceneQualityPreference, weatherObservation]);
@@ -181,9 +212,15 @@ export function WeatherHomeScreen() {
   const isFavorite = favoriteLocations.some((location) => location.id === currentLocation.id);
 
   const toggleCurrentFavorite = useCallback(() => {
-    setFavoriteLocations((previous) => isFavorite
-      ? previous.filter((location) => location.id !== currentLocation.id)
-      : [...previous, currentLocation]);
+    setFavoriteLocations((previous) => {
+      const next = isFavorite
+        ? previous.filter((location) => location.id !== currentLocation.id)
+        : [...previous, currentLocation];
+      void saveFavoriteLocations(next).catch(() => {
+        Alert.alert('無法儲存收藏', '收藏已套用於本次使用，但目前無法保存到裝置。');
+      });
+      return next;
+    });
   }, [currentLocation, isFavorite]);
 
   const selectLocation = useCallback(async (location: TaiwanLocation) => {
@@ -236,13 +273,20 @@ export function WeatherHomeScreen() {
   const openMap = useCallback(() => setActiveTab('map'), []);
   const openAlarmModal = useCallback(() => setIsAlarmModalOpen(true), []);
   const removeFavorite = useCallback((location: TaiwanLocation) => {
-    setFavoriteLocations((previous) => previous.filter((item) => item.id !== location.id));
+    setFavoriteLocations((previous) => {
+      const next = previous.filter((item) => item.id !== location.id);
+      void saveFavoriteLocations(next).catch(() => {
+        Alert.alert('無法儲存收藏', '收藏已套用於本次使用，但目前無法保存到裝置。');
+      });
+      return next;
+    });
   }, []);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: dark ? '#020617' : '#F1F5F9' }}>
       <StatusBar style={dark ? 'light' : 'dark'} />
       <View style={{ width: Math.min(width, 430), flex: 1, overflow: 'hidden', backgroundColor: dark ? '#0B1120' : '#F4F7F9' }}>
+        {activeTab === 'weather' && isDisasterVisualActive ? <DisasterAmbientGlow reducedMotion={reducedMotion} /> : null}
         {isHumanDisasterOpen || isEarthquakeOpen || isTyphoonOpen ? null : <TopHeader title={pageTitles[activeTab]} onOpenMap={openMap} onOpenSidebar={openSidebar} dark={dark} />}
         {isHumanDisasterOpen ? (
           <SwipeBackView onBack={() => setIsHumanDisasterOpen(false)}>
@@ -258,7 +302,7 @@ export function WeatherHomeScreen() {
           </SwipeBackView>
         ) : activeTab === 'weather' ? (
           <ScrollView showsVerticalScrollIndicator={false} contentInsetAdjustmentBehavior="never" contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 120 + insets.bottom, gap: 16 }}>
-            <WeatherCard data={appData} isFavorite={isFavorite} onToggleFavorite={toggleCurrentFavorite} onOpenAqi={openAqiDrawer} sceneInput={sceneInput} />
+            <WeatherCard data={appData} isFavorite={isFavorite} onToggleFavorite={toggleCurrentFavorite} onOpenAqi={openAqiDrawer} isDisasterVisualActive={isDisasterVisualActive} sceneInput={sceneInput} />
             <LifeSuggestionsSection suggestions={lifeSuggestions} />
             <HourlyForecastSection forecast={hourlyForecast} />
             <WeeklyForecastSection forecast={weeklyForecast} period={weeklyTab} onChangePeriod={setWeeklyTab} />
@@ -281,7 +325,6 @@ export function WeatherHomeScreen() {
             <Text style={{ color: '#94A3B8', fontSize: 14, fontWeight: '600' }}>{pageTitles[activeTab]}頁面建置中</Text>
           </View>
         )}
-
         {ENABLE_ALERT_ENTRY && activeTab === 'weather' && appData.alerts.hasActiveAlarm ? (
           <Pressable accessibilityRole="button" accessibilityLabel="開啟即時警報" onPress={openAlarmModal} style={({ pressed }) => ({ position: 'absolute', right: 20, bottom: Math.max(110, insets.bottom + 88), zIndex: 20, alignItems: 'center', justifyContent: 'center', padding: 14, borderRadius: 999, borderWidth: 1, borderColor: '#FEF2F2', backgroundColor: '#FFFFFF', boxShadow: '0 6px 16px rgba(0,0,0,0.12)', transform: [{ scale: pressed ? 0.9 : 1 }] })}>
             <WeatherIcon name="alert-triangle" size={24} strokeWidth={2.5} color="#EF4444" />

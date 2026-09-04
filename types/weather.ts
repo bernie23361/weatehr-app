@@ -124,6 +124,14 @@ export interface WeeklyForecast {
   max: string;
   progressWidth: `${number}%`;
   progressLeft: `${number}%`;
+  dayMin?: string;
+  dayMax?: string;
+  dayProgressWidth?: `${number}%`;
+  dayProgressLeft?: `${number}%`;
+  nightMin?: string;
+  nightMax?: string;
+  nightProgressWidth?: `${number}%`;
+  nightProgressLeft?: `${number}%`;
 }
 
 export interface LifeSuggestion {
