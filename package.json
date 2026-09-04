@@ -41,6 +41,7 @@
     "build:dev:android": "eas build --platform android --profile development",
     "build:dev:ios": "eas build --platform ios --profile development",
     "typecheck": "node --stack-size=8192 node_modules/typescript/lib/tsc.js --noEmit",
+    "generate:highways": "node scripts/generate-highway-centerlines.mjs",
     "test:iwesr": "node scripts/run-iwesr-tests.cjs"
   }
 }

@@ -6,7 +6,7 @@ import { getMapLibreModule, TaiwanMap, type MapViewport } from '@/components/tai
 import { WeatherIcon } from '@/components/weather-icon';
 import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
 import { resolveFeelsLikeStatus } from '@/data/weather-stat-status';
-import { taiwanHighways } from '@/data/taiwan-highways';
+import { taiwanHighwayCenterlines } from '@/data/taiwan-highway-centerlines';
 import { taiwanIslands } from '@/data/taiwan-islands';
 import { unprojectCoordinates } from '@/data/taiwan-map-projection';
 import { RADAR_BOUNDS, radarImageUrl } from '@/config/radar';
@@ -17,115 +17,8 @@ type ObservationLayer = 'radar' | 'temperature' | 'rainfall' | 'wind' | 'humidit
 
 const layerOrder: ObservationLayer[] = ['radar', 'temperature', 'rainfall', 'wind', 'humidity', 'visibility', 'highways'];
 
-type HighwaySegmentBoundary = {
-  id: string;
-  /** The two endpoints of a short line crossing both carriageways, as [latitude, longitude]. */
-  endpoints: [[number, number], [number, number]];
-};
-
-const HIGHWAY_SEGMENT_BOUNDARIES: HighwaySegmentBoundary[] = [
-  // Add road-section boundaries here after the section list is confirmed.
-  // Example: { id: 'national-1-section-01', endpoints: [[25.05, 121.52], [25.0502, 121.521]] },
-];
-const SHOW_HIGHWAY_SEGMENT_BOUNDARIES = false;
-
 const HIGHWAY_FILL_COLOR = '#9CA3AF';
 const HIGHWAY_BORDER_COLOR = '#4B5563';
-
-type LatitudeLongitude = [number, number];
-
-const coordinateDistanceSquared = (a: LatitudeLongitude, b: LatitudeLongitude) => (
-  (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
-);
-
-function resampleRoadLine(points: LatitudeLongitude[], sampleCount: number): LatitudeLongitude[] {
-  if (points.length < 2 || sampleCount < 2) return points;
-  const distances = [0];
-  for (let index = 1; index < points.length; index += 1) {
-    distances.push(distances[index - 1] + Math.sqrt(coordinateDistanceSquared(points[index - 1], points[index])));
-  }
-  const totalDistance = distances[distances.length - 1];
-  if (totalDistance === 0) return Array.from({ length: sampleCount }, () => points[0]);
-
-  let sourceIndex = 1;
-  return Array.from({ length: sampleCount }, (_, sampleIndex) => {
-    const targetDistance = totalDistance * sampleIndex / (sampleCount - 1);
-    while (sourceIndex < distances.length - 1 && distances[sourceIndex] < targetDistance) sourceIndex += 1;
-    const startDistance = distances[sourceIndex - 1];
-    const endDistance = distances[sourceIndex];
-    const progress = (targetDistance - startDistance) / (endDistance - startDistance || 1);
-    const start = points[sourceIndex - 1];
-    const end = points[sourceIndex];
-    return [
-      start[0] + (end[0] - start[0]) * progress,
-      start[1] + (end[1] - start[1]) * progress,
-    ];
-  });
-}
-
-function nearestPointOnRoadSegment(point: LatitudeLongitude, start: LatitudeLongitude, end: LatitudeLongitude) {
-  const deltaLatitude = end[0] - start[0];
-  const deltaLongitude = end[1] - start[1];
-  const lengthSquared = deltaLatitude ** 2 + deltaLongitude ** 2;
-  const projection = lengthSquared === 0 ? 0 : Math.min(1, Math.max(0, (
-    (point[0] - start[0]) * deltaLatitude + (point[1] - start[1]) * deltaLongitude
-  ) / lengthSquared));
-  const nearest: LatitudeLongitude = [
-    start[0] + deltaLatitude * projection,
-    start[1] + deltaLongitude * projection,
-  ];
-  return { nearest, distanceSquared: coordinateDistanceSquared(point, nearest) };
-}
-
-/** Collapse public northbound/southbound traces into one geographic midpoint line. */
-function roadCenterline(segment: LatitudeLongitude[], siblingSegments: LatitudeLongitude[][]): LatitudeLongitude[] {
-  if (segment.length < 6) return segment;
-  const start = segment[0];
-  let turnIndex = 1;
-  let maximumDistance = 0;
-  for (let index = 1; index < segment.length; index += 1) {
-    const distance = coordinateDistanceSquared(start, segment[index]);
-    if (distance > maximumDistance) {
-      maximumDistance = distance;
-      turnIndex = index;
-    }
-  }
-
-  const closesNearStart = coordinateDistanceSquared(start, segment[segment.length - 1]) < maximumDistance * 0.01;
-  if (closesNearStart && turnIndex >= 2 && turnIndex <= segment.length - 3) {
-    const outbound = segment.slice(0, turnIndex + 1);
-    const inbound = segment.slice(turnIndex).reverse();
-    const sampleCount = Math.min(320, Math.max(outbound.length, inbound.length));
-    const outboundSamples = resampleRoadLine(outbound, sampleCount);
-    const inboundSamples = resampleRoadLine(inbound, sampleCount);
-    return outboundSamples.map((point, index) => ([
-      (point[0] + inboundSamples[index][0]) / 2,
-      (point[1] + inboundSamples[index][1]) / 2,
-    ]));
-  }
-
-  // Many routes store the two directions as separate open segments. Project
-  // every point onto the nearest sibling trace and use their exact midpoint.
-  const maximumPairDistanceSquared = 0.0008 ** 2;
-  return segment.map((point) => {
-    let closestPoint: LatitudeLongitude | undefined;
-    let closestDistanceSquared = maximumPairDistanceSquared;
-    for (const sibling of siblingSegments) {
-      if (sibling === segment) continue;
-      for (let index = 1; index < sibling.length; index += 1) {
-        const candidate = nearestPointOnRoadSegment(point, sibling[index - 1], sibling[index]);
-        if (candidate.distanceSquared < closestDistanceSquared) {
-          closestPoint = candidate.nearest;
-          closestDistanceSquared = candidate.distanceSquared;
-        }
-      }
-    }
-    return closestPoint ? [
-      (point[0] + closestPoint[0]) / 2,
-      (point[1] + closestPoint[1]) / 2,
-    ] : point;
-  });
-}
 
 const temperatureGradientStops: ColorStop[] = TEMPERATURE_COLOR_STOPS
   .filter((stop, index, stops) => index === 0 || stop.color !== stops[index - 1].color)
@@ -409,6 +302,7 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
 
     const controller = new AbortController();
     const loadTemperatureMetadata = async () => {
+      const timeout = setTimeout(() => controller.abort(), 8_000);
       try {
         const response = await fetch(temperatureGridMetadataUrl(), { signal: controller.signal });
         if (!response.ok) return;
@@ -426,6 +320,8 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
         if (!(error instanceof Error && error.name === 'AbortError')) {
           console.warn('Failed to load temperature Worker metadata');
         }
+      } finally {
+        clearTimeout(timeout);
       }
     };
     void loadTemperatureMetadata();
@@ -509,26 +405,7 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
 
   const highwayGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
     type: 'FeatureCollection',
-    features: taiwanHighways.filter((route) => route.type === 'national').flatMap((route) => route.segments.map((segment, index) => ({
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates: roadCenterline(segment, route.segments).map(([latitude, longitude]) => [longitude, latitude]),
-      },
-      properties: { type: route.type, label: route.label, routeId: route.id, segmentIndex: index },
-    }))),
-  }), []);
-
-  const highwaySegmentBoundaryGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
-    type: 'FeatureCollection',
-    features: HIGHWAY_SEGMENT_BOUNDARIES.map((boundary) => ({
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates: boundary.endpoints.map(([latitude, longitude]) => [longitude, latitude]),
-      },
-      properties: { boundaryId: boundary.id },
-    })),
+    features: taiwanHighwayCenterlines.features,
   }), []);
 
   const dateText = observationDate
@@ -627,25 +504,7 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
               'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1, 16, 2],
               'line-opacity': 1,
             }}
-            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-          />
-        </GeoJSONSource>
-      ) : null}
-      {layer === 'highways' ? (
-        <GeoJSONSource
-          key="highway-segment-boundaries-source"
-          id="highway-segment-boundaries-source"
-          data={highwaySegmentBoundaryGeoJson}
-        >
-          <Layer
-            id="highway-segment-boundaries"
-            type="line"
-            layout={{
-              visibility: SHOW_HIGHWAY_SEGMENT_BOUNDARIES ? 'visible' : 'none',
-              'line-cap': 'butt',
-              'line-join': 'round',
-            }}
-            paint={{ 'line-color': HIGHWAY_BORDER_COLOR, 'line-width': 1.4, 'line-opacity': 0.95 }}
+layout={{ 'line-cap': 'round', 'line-join': 'round' }}
           />
         </GeoJSONSource>
       ) : null}
@@ -679,7 +538,7 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
         </>
       );
     }
-  )(), [highwayGeoJson, highwaySegmentBoundaryGeoJson, layer, radarUrl, stationGeoJson, temperatureGridUrl]);
+  )(), [highwayGeoJson, layer, radarUrl, stationGeoJson, temperatureGridUrl]);
 
   return (
     <View style={{ flex: 1, overflow: 'hidden', backgroundColor: '#E8F0F8' }}>
