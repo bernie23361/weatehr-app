@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // name 必須與既有 Dashboard worker 同名（= workers.dev subdomain），wrangler 才能接管同一 script、
+  // 維持用戶端 URL 不變。目前 = damp-term-b600（weather0215.workers.dev）。
+  // 部署前請以 `npx wrangler whoami` 或 Dashboard 確認實際名稱。
+  "name": "damp-term-b600",
+  "main": "cloudflare-worker/cwa-weather-worker.mjs",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [
+    {
+      "binding": "WEATHER_REALTIME_KV",
+      "id": "231e63ba3a5b497db1cfe3d63e15ee24"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
+  }
+}

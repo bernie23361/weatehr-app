@@ -1,25 +1,31 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Animated, Pressable, ScrollView, Text, View } from 'react-native';
+import { Animated, AppState, Pressable, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { SectionCard, SectionHeading, StatCard, subtleShadow } from '@/components/common';
 import { WeatherIcon } from '@/components/weather-icon';
 import { resolveWeatherConditionIcon } from '@/data/weather-icon-mapping';
 import { resolveAqiStatus } from '@/data/aqi-status';
+import { selectLifeRecommendations } from '@/data/life-recommendations';
 import { disasterWeatherCardGradientColors, normalWeatherCardGradientColors } from '@/data/weather-state-colors';
 import { resolveFeelsLikeStatus, resolveHumidityStatus, resolveWindStatus } from '@/data/weather-stat-status';
 import { WeatherScene } from '@/src/weather-scene/components/weather-scene';
 import { resolveWeatherScene } from '@/src/weather-scene/engine/resolve-weather-scene';
 import type { WeatherSceneInput } from '@/src/weather-scene/types';
+import type { StatLabelTone } from '@/services/app-settings';
 import type { AppData, HourlyForecast, LifeSuggestion, WeeklyForecast, WeeklyPeriod } from '@/types/weather';
+
+import type { WeatherStat } from '@/data/weather-stat-details';
 
 interface WeatherCardProps {
   data: AppData;
   isFavorite: boolean;
-  onToggleFavorite: () => void;
+onToggleFavorite: () => void;
   onOpenAqi: () => void;
+  onOpenWeatherStat: (metric: WeatherStat) => void;
   isDisasterVisualActive: boolean;
   sceneInput?: WeatherSceneInput;
+  labelTone?: StatLabelTone;
 }
 
 const parseClockMinutes = (value: string) => {
@@ -57,7 +63,7 @@ const getSolarArcPosition = (progress: number) => {
 };
 
 
-export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggleFavorite, onOpenAqi, isDisasterVisualActive, sceneInput }: WeatherCardProps) {
+export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggleFavorite, onOpenAqi, onOpenWeatherStat, isDisasterVisualActive, sceneInput, labelTone = 'standard' }: WeatherCardProps) {
   const [temperatureWidth, setTemperatureWidth] = useState(72);
   const [currentMinutes, setCurrentMinutes] = useState(getCurrentClockMinutes);
   const liveDotPulse = useRef(new Animated.Value(0)).current;
@@ -68,10 +74,10 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
   const naturalStatusWidth = statusCharacters.length * estimatedCharacterWidth;
   const comfortableStatusWidth = naturalStatusWidth + Math.max(0, statusCharacters.length - 1) * comfortableGap;
   const statusWidth = Math.max(naturalStatusWidth, Math.min(temperatureWidth, comfortableStatusWidth));
-  const statusOffset = (temperatureWidth - statusWidth) / 2;
-  const feelsLikeStatus = resolveFeelsLikeStatus(data.weather.feelsLike);
-  const humidityStatus = resolveHumidityStatus(data.weather.humidity);
-  const windStatus = resolveWindStatus(data.weather.windSpeed);
+const statusOffset = (temperatureWidth - statusWidth) / 2;
+  const feelsLikeStatus = resolveFeelsLikeStatus(data.weather.feelsLike, labelTone);
+  const humidityStatus = resolveHumidityStatus(data.weather.humidity, labelTone);
+  const windStatus = resolveWindStatus(data.weather.windSpeed, labelTone);
   const aqiStatus = resolveAqiStatus(data.aqi.value, data.aqi.status);
   const stateGradientColors = isDisasterVisualActive ? disasterWeatherCardGradientColors : normalWeatherCardGradientColors;
   const scene = useMemo(() => sceneInput ? resolveWeatherScene(sceneInput) : undefined, [sceneInput]);
@@ -151,9 +157,9 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
       </View>
 
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 }}>
-        <StatCard label="體感溫度" value={data.weather.feelsLike} status={feelsLikeStatus.label} badgeBg={feelsLikeStatus.badgeBg} badgeText={feelsLikeStatus.badgeText} />
-        <StatCard label="相對濕度" value={data.weather.humidity} status={humidityStatus.label} badgeBg={humidityStatus.badgeBg} badgeText={humidityStatus.badgeText} />
-        <StatCard label="平均風速" value={data.weather.windSpeed} status={windStatus.label} badgeBg={windStatus.badgeBg} badgeText={windStatus.badgeText} />
+        <StatCard accessibilityRole="button" accessibilityLabel="查看體感溫度資訊" onPress={() => onOpenWeatherStat('feelsLike')} label="體感溫度" value={data.weather.feelsLike} status={feelsLikeStatus.label} badgeBg={feelsLikeStatus.badgeBg} badgeText={feelsLikeStatus.badgeText} />
+        <StatCard accessibilityRole="button" accessibilityLabel="查看相對濕度資訊" onPress={() => onOpenWeatherStat('humidity')} label="相對濕度" value={data.weather.humidity} status={humidityStatus.label} badgeBg={humidityStatus.badgeBg} badgeText={humidityStatus.badgeText} />
+        <StatCard accessibilityRole="button" accessibilityLabel="查看平均風速資訊" onPress={() => onOpenWeatherStat('windSpeed')} label="平均風速" value={data.weather.windSpeed} status={windStatus.label} badgeBg={windStatus.badgeBg} badgeText={windStatus.badgeText} />
       </View>
 
       <Pressable onPress={onOpenAqi} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4, opacity: pressed ? 0.6 : 1 })}>
@@ -172,24 +178,42 @@ export const WeatherCard = memo(function WeatherCard({ data, isFavorite, onToggl
 
 function SuggestionCard({ item }: { item: LifeSuggestion }) {
   return (
-    <Pressable style={({ pressed }) => ({ width: 90, minWidth: 90, alignItems: 'center', paddingHorizontal: 8, paddingVertical: 12, marginHorizontal: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: '#F8FAFC', backgroundColor: '#FFFFFF', boxShadow: pressed ? '0 4px 8px rgba(0,0,0,0.08)' : subtleShadow, transform: [{ translateY: pressed ? -4 : 0 }] })}>
+    <View style={{ flex: 1, minWidth: 0, alignItems: 'center', paddingHorizontal: 4, paddingVertical: 12, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: '#F1F5F9', backgroundColor: '#FFFFFF', boxShadow: subtleShadow }}>
       <View style={{ padding: 6, borderRadius: 12, backgroundColor: item.iconBg, marginBottom: 8 }}>
         <WeatherIcon name={item.icon} size={18} color={item.iconColor} />
       </View>
       <Text style={{ color: '#9CA3AF', fontSize: 10, marginBottom: 2 }}>{item.label}</Text>
       <Text style={{ color: '#374151', fontSize: 13, fontWeight: '600', marginBottom: 2 }}>{item.value}</Text>
-      <Text style={{ color: '#9CA3AF', fontSize: 9 }}>{item.desc}</Text>
-    </Pressable>
+      <Text style={{ color: '#9CA3AF', fontSize: 9, textAlign: 'center' }}>{item.desc}</Text>
+    </View>
   );
 }
 
-export const LifeSuggestionsSection = memo(function LifeSuggestionsSection({ suggestions }: { suggestions: LifeSuggestion[] }) {
+export const LifeSuggestionsSection = memo(function LifeSuggestionsSection({ suggestions, data, onOpenLifeWeather }: { suggestions: LifeSuggestion[]; data: AppData; onOpenLifeWeather: () => void }) {
+  const [now, setNow] = useState(() => new Date());
+  const [contentWidth, setContentWidth] = useState(0);
+  useEffect(() => {
+    const refresh = () => setNow(new Date());
+    const timer = setInterval(refresh, 10 * 60_000);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refresh();
+    });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, []);
+  const recommendations = useMemo(() => selectLifeRecommendations(data, suggestions, now), [data, suggestions, now]);
+  const visibleSuggestions = recommendations.slice(0, contentWidth >= 360 ? 4 : 3);
   return (
     <SectionCard>
-      <SectionHeading>現在適合做什麼</SectionHeading>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} snapToInterval={98} decelerationRate="fast" contentContainerStyle={{ paddingBottom: 8, marginHorizontal: -4 }}>
-        {suggestions.map((item) => <SuggestionCard key={item.id} item={item} />)}
-      </ScrollView>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <View style={{ flexShrink: 1 }}><SectionHeading>現在適合做什麼</SectionHeading></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="查看更多生活天氣" onPress={onOpenLifeWeather} hitSlop={8} style={({ pressed }) => ({ minHeight: 32, justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}>
+          <Text style={{ color: '#0057D9', fontSize: 12, fontWeight: '600' }}>查看更多 ›</Text>
+        </Pressable>
+      </View>
+      <View onLayout={(event) => setContentWidth(event.nativeEvent.layout.width)} style={{ flexDirection: 'row', gap: 8 }}>
+        {visibleSuggestions.map((item) => <SuggestionCard key={item.id} item={item} />)}
+      </View>
+      <Text style={{ color: '#94A3B8', fontSize: 10, marginTop: 12 }}>依目前天氣推薦 · 約每 15 分鐘更新</Text>
     </SectionCard>
   );
 });
