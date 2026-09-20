@@ -9,6 +9,9 @@ interface TopHeaderProps {
   dark?: boolean;
 }
 
+// The disaster guide is not included in the first release.
+const SHOW_DISASTER_GUIDE = false;
+
 function DisasterMapIcon({ size = 22, color = '#94A3B8' }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
@@ -29,11 +32,11 @@ export function TopHeader({ title, onOpenMap, onOpenSidebar, dark = false }: Top
   const insets = useSafeAreaInsets();
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: Math.max(insets.top, 12), paddingBottom: 12, backgroundColor: dark ? '#111827' : '#FFFFFF', zIndex: 10 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="開啟防災指南" onPress={onOpenMap} hitSlop={8} style={({ pressed }) => ({ padding: 8, marginLeft: -8, borderRadius: 999, backgroundColor: pressed ? (dark ? '#1E293B' : '#F8FAFC') : 'transparent', transform: [{ scale: pressed ? 0.95 : 1 }] })}>
+      {SHOW_DISASTER_GUIDE ? <Pressable accessibilityRole="button" accessibilityLabel="開啟防災指南" onPress={onOpenMap} hitSlop={8} style={({ pressed }) => ({ padding: 8, marginLeft: -8, borderRadius: 999, backgroundColor: pressed ? (dark ? '#1E293B' : '#F8FAFC') : 'transparent', transform: [{ scale: pressed ? 0.95 : 1 }] })}>
         <DisasterMapIcon size={22} color={dark ? '#94A3B8' : '#94A3B8'} />
-      </Pressable>
+      </Pressable> : <View style={{ width: 38, height: 38, marginLeft: -8 }} />}
       <Text style={{ color: dark ? '#F8FAFC' : '#1E293B', fontSize: 16, fontWeight: '600' }}>{title}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="開啟縣市收藏" onPress={onOpenSidebar} hitSlop={8} style={({ pressed }) => ({ padding: 8, marginRight: -8, borderRadius: 999, backgroundColor: pressed ? (dark ? '#1E293B' : '#F8FAFC') : 'transparent', transform: [{ scale: pressed ? 0.95 : 1 }] })}>
+      <Pressable accessibilityRole="button" accessibilityLabel="開啟天氣概況Weather" onPress={onOpenSidebar} hitSlop={8} style={({ pressed }) => ({ padding: 8, marginRight: -8, borderRadius: 999, backgroundColor: pressed ? (dark ? '#1E293B' : '#F8FAFC') : 'transparent', transform: [{ scale: pressed ? 0.95 : 1 }] })}>
         <MenuIcon size={22} color="#94A3B8" />
       </Pressable>
     </View>

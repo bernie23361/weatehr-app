@@ -12,12 +12,14 @@ export type WeatherIconName =
   | 'activity'
   | 'alert-triangle'
   | 'bike'
+  | 'car'
   | 'cloud'
   | 'cloud-rain'
   | 'cup-soda'
   | 'dog'
   | 'droplets'
   | 'eye'
+  | 'fish'
   | 'heart'
   | 'leaf'
   | 'locate'
@@ -34,6 +36,7 @@ export type WeatherIconName =
   | 'store'
   | 'sun'
   | 'thermometer'
+  | 'umbrella'
   | 'user'
   | 'wind'
   | 'x';
@@ -142,6 +145,22 @@ export interface LifeSuggestion {
   desc: string;
   iconBg: string;
   iconColor: string;
+}
+
+export type LifeIndexLevel = 'good' | 'medium' | 'bad' | 'risk';
+
+export interface LifeIndex {
+  id: string;
+  icon: WeatherIconName;
+  label: string;
+  value: string;
+  level: LifeIndexLevel;
+  desc: string;
+  tips?: string;
+  iconBg: string;
+  iconColor: string;
+  badgeBg: string;
+  badgeText: string;
 }
 
 export interface SrdiPresentation {

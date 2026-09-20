@@ -2,12 +2,16 @@ import { Platform } from 'react-native';
 
 export type WeatherRefreshIntervalMinutes = 15 | 30 | 60;
 export type AppearanceMode = 'light' | 'dark';
+export type StatLabelTone = 'standard' | 'daily' | 'funny';
+export type VehicleType = 'car' | 'motorcycle';
 
 export interface AppSettings {
   autoRefreshWeather: boolean;
   refreshIntervalMinutes: WeatherRefreshIntervalMinutes;
   reduceMotion: boolean;
   appearanceMode: AppearanceMode;
+  statLabelTone: StatLabelTone;
+  vehicleType: VehicleType;
 }
 
 export const defaultAppSettings: AppSettings = {
@@ -15,6 +19,8 @@ export const defaultAppSettings: AppSettings = {
   refreshIntervalMinutes: 30,
   reduceMotion: false,
   appearanceMode: 'light',
+  statLabelTone: 'standard',
+  vehicleType: 'car',
 };
 
 const SETTINGS_KEY = 'weather-app.settings.v1';
@@ -34,6 +40,10 @@ export async function loadAppSettings(): Promise<AppSettings> {
         : defaultAppSettings.refreshIntervalMinutes,
       reduceMotion: parsed.reduceMotion ?? defaultAppSettings.reduceMotion,
       appearanceMode: parsed.appearanceMode === 'dark' ? 'dark' : 'light',
+      statLabelTone: parsed.statLabelTone === 'daily' || parsed.statLabelTone === 'funny'
+        ? parsed.statLabelTone
+        : 'standard',
+      vehicleType: parsed.vehicleType === 'motorcycle' ? 'motorcycle' : 'car',
     };
   } catch {
     return defaultAppSettings;

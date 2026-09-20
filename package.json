@@ -8,8 +8,8 @@
     "@expo/metro-runtime": "~6.1.2",
     "@maplibre/maplibre-react-native": "11.3.6",
     "expo": "~54.0.36",
-    "expo-build-properties": "~1.0.10",
     "expo-blur": "~15.0.8",
+    "expo-build-properties": "~1.0.10",
     "expo-dev-client": "~6.0.21",
     "expo-image": "~3.0.11",
     "expo-linear-gradient": "~15.0.8",
@@ -17,6 +17,7 @@
     "expo-notifications": "~0.32.17",
     "expo-secure-store": "~15.0.8",
     "expo-status-bar": "~3.0.9",
+    "expo-system-ui": "~6.0.9",
     "lucide-react-native": "^1.25.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
@@ -26,9 +27,18 @@
     "react-native-web": "0.21.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
     "@types/react": "~19.1.0",
+    "adm-zip": "^0.5.16",
     "eas-cli": "^21.7.0",
-    "typescript": "~5.9.2"
+    "geojson-vt": "^4.0.2",
+    "geotiff": "^2.1.3",
+    "pngjs": "^7.0.0",
+    "proj4": "^2.15.0",
+    "shapefile": "^0.6.6",
+    "typescript": "~5.9.2",
+    "vt-pbf": "^3.1.3",
+    "wrangler": "^4.132.0"
   },
   "scripts": {
     "start": "expo start --dev-client",
@@ -42,6 +52,11 @@
     "build:dev:ios": "eas build --platform ios --profile development",
     "typecheck": "node --stack-size=8192 node_modules/typescript/lib/tsc.js --noEmit",
     "generate:highways": "node scripts/generate-highway-centerlines.mjs",
-    "test:iwesr": "node scripts/run-iwesr-tests.cjs"
+    "test:iwesr": "node scripts/run-iwesr-tests.cjs",
+    "map:fetch": "node scripts/map-tiles/fetch-sources.mjs",
+    "map:base": "node scripts/map-tiles/build-base-tiles.mjs",
+    "map:dtm": "node scripts/map-tiles/fetch-dtm.mjs",
+    "map:terrain": "node scripts/map-tiles/build-terrain-tiles.mjs",
+    "map:upload": "node scripts/map-tiles/upload-r2.mjs"
   }
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Alert, AppState, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Alert, Appearance, AppState, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { DarkModeNotice } from '@/components/overlays/dark-mode-notice';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { AqiDrawer } from '@/components/overlays/aqi-drawer';
@@ -19,6 +20,7 @@ import { SwipeBackView } from '@/components/swipe-back-view';
 import { DisasterMapScreen } from '@/screens/disaster-map-screen';
 import { SettingsScreen } from '@/screens/settings-screen';
 import { WeatherObservationScreen } from '@/screens/weather-observation-screen';
+import { LifeWeatherScreen } from '@/screens/life-weather-screen';
 import { AstroSection, HourlyForecastSection, LifeSuggestionsSection, WeatherCard, WeeklyForecastSection } from '@/components/weather-sections';
 import { initialAppData, initialHourlyForecast, initialLifeSuggestions, initialWeeklyForecast, pageTitles } from '@/data/weather-data';
 import { ENABLE_ALERT_ENTRY, ENABLE_DISASTER_VISUAL_STATE, ENABLE_IWESR } from '@/config/features';
@@ -31,6 +33,8 @@ import { setThemeRuntimeDark } from '@/services/theme-runtime';
 import { weatherObservationToSceneInput } from '@/src/weather-scene/adapters/weather-observation-to-scene-input';
 import type { SceneQualityPreference } from '@/src/weather-scene/types';
 import type { AppTab, TaiwanLocation, WeeklyPeriod } from '@/types/weather';
+
+import type { WeatherStat } from '@/data/weather-stat-details';
 
 const placeholderIcons: Partial<Record<AppTab, 'eye' | 'megaphone' | 'user' | 'map'>> = {
   observe: 'eye', warning: 'megaphone', profile: 'user', map: 'map',
@@ -45,9 +49,11 @@ export function WeatherHomeScreen() {
   const [isHumanDisasterOpen, setIsHumanDisasterOpen] = useState(false);
   const [isEarthquakeOpen, setIsEarthquakeOpen] = useState(false);
   const [isTyphoonOpen, setIsTyphoonOpen] = useState(false);
+  const [isLifeWeatherOpen, setIsLifeWeatherOpen] = useState(false);
   const [weeklyTab, setWeeklyTab] = useState<WeeklyPeriod>('day');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [favoriteLocations, setFavoriteLocations] = useState<TaiwanLocation[]>([]);
+  const [drawerMetric, setDrawerMetric] = useState<WeatherStat>();
   const [isAqiDrawerOpen, setIsAqiDrawerOpen] = useState(false);
   const [isAlarmModalOpen, setIsAlarmModalOpen] = useState(false);
   const [isWebAlertToastVisible, setIsWebAlertToastVisible] = useState(false);
@@ -60,6 +66,7 @@ export function WeatherHomeScreen() {
   const [isSceneQualityOpen, setIsSceneQualityOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [darkModeNoticeVisible, setDarkModeNoticeVisible] = useState(false);
   const [systemReducedMotion, setSystemReducedMotion] = useState(false);
   useEffect(() => {
     const getAutoPeriod = (): WeeklyPeriod => {
@@ -156,10 +163,30 @@ export function WeatherHomeScreen() {
 
   useEffect(() => {
     void loadAppSettings().then((settings) => {
-      setAppSettings(settings);
+      const needsConfirmation = settings.appearanceMode === 'dark' || Appearance.getColorScheme() === 'dark';
+      setAppSettings({ ...settings, appearanceMode: 'light' });
+      setDarkModeNoticeVisible(needsConfirmation);
       setSettingsLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    const requestSystemDarkMode = () => {
+      if (Appearance.getColorScheme() === 'dark' && appSettings.appearanceMode !== 'dark') {
+        setDarkModeNoticeVisible(true);
+      }
+    };
+    let previousState = AppState.currentState;
+    const stateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && previousState !== 'active') requestSystemDarkMode();
+      previousState = state;
+    });
+    const appearanceSubscription = Appearance.addChangeListener(() => {
+      if (AppState.currentState === 'active') requestSystemDarkMode();
+    });
+    return () => { stateSubscription.remove(); appearanceSubscription.remove(); };
+  }, [settingsLoaded, appSettings.appearanceMode]);
 
   useEffect(() => {
     void loadFavoriteLocations().then(setFavoriteLocations);
@@ -259,19 +286,35 @@ export function WeatherHomeScreen() {
   }, []);
 
   const changeSettings = useCallback((settings: AppSettings) => {
+    if (settings.appearanceMode === 'dark' && appSettings.appearanceMode !== 'dark') {
+      setDarkModeNoticeVisible(true);
+      return;
+    }
+    persistSettings(settings);
+  }, [appSettings.appearanceMode]);
+
+  function persistSettings(settings: AppSettings) {
     setAppSettings(settings);
     void saveAppSettings(settings).catch(() => {
       Alert.alert('無法儲存設定', '設定已套用於本次使用，但目前無法保存到裝置。');
     });
-  }, []);
+  }
 
-  const openAqiDrawer = useCallback(() => setIsAqiDrawerOpen(true), []);
+  const resolveDarkModeNotice = (confirmed: boolean) => {
+    setDarkModeNoticeVisible(false);
+    persistSettings({ ...appSettings, appearanceMode: confirmed ? 'dark' : 'light' });
+  };
+
+  const openAqiDrawer = useCallback(() => { setDrawerMetric(undefined); setIsAqiDrawerOpen(true); }, []);
+  const openWeatherStat = useCallback((metric: WeatherStat) => { setDrawerMetric(metric); setIsAqiDrawerOpen(true); }, []);
   const closeAqiDrawer = useCallback(() => setIsAqiDrawerOpen(false), []);
   const closeAlarmModal = useCallback(() => setIsAlarmModalOpen(false), []);
   const closeSidebar = useCallback(() => setIsSidebarOpen(false), []);
   const openSidebar = useCallback(() => setIsSidebarOpen(true), []);
   const openMap = useCallback(() => setActiveTab('map'), []);
   const openAlarmModal = useCallback(() => setIsAlarmModalOpen(true), []);
+  const openLifeWeather = useCallback(() => setIsLifeWeatherOpen(true), []);
+  const closeLifeWeather = useCallback(() => setIsLifeWeatherOpen(false), []);
   const removeFavorite = useCallback((location: TaiwanLocation) => {
     setFavoriteLocations((previous) => {
       const next = previous.filter((item) => item.id !== location.id);
@@ -285,9 +328,10 @@ export function WeatherHomeScreen() {
   return (
     <View style={{ flex: 1, alignItems: 'center', backgroundColor: dark ? '#020617' : '#F1F5F9' }}>
       <StatusBar style={dark ? 'light' : 'dark'} />
+      <DarkModeNotice visible={darkModeNoticeVisible} reducedMotion={reducedMotion} onCancel={() => resolveDarkModeNotice(false)} onConfirm={() => resolveDarkModeNotice(true)} />
       <View style={{ width: Math.min(width, 430), flex: 1, overflow: 'hidden', backgroundColor: dark ? '#0B1120' : '#F4F7F9' }}>
         {activeTab === 'weather' && isDisasterVisualActive ? <DisasterAmbientGlow reducedMotion={reducedMotion} /> : null}
-        {isHumanDisasterOpen || isEarthquakeOpen || isTyphoonOpen ? null : <TopHeader title={pageTitles[activeTab]} onOpenMap={openMap} onOpenSidebar={openSidebar} dark={dark} />}
+        {isHumanDisasterOpen || isEarthquakeOpen || isTyphoonOpen || isLifeWeatherOpen ? null : <TopHeader title={pageTitles[activeTab]} onOpenMap={openMap} onOpenSidebar={openSidebar} dark={dark} />}
         {isHumanDisasterOpen ? (
           <SwipeBackView onBack={() => setIsHumanDisasterOpen(false)}>
             <HumanDisasterResponseScreen onBack={() => setIsHumanDisasterOpen(false)} />
@@ -300,10 +344,14 @@ export function WeatherHomeScreen() {
           <SwipeBackView onBack={() => setIsTyphoonOpen(false)}>
             <TyphoonResponseScreen onBack={() => setIsTyphoonOpen(false)} />
           </SwipeBackView>
+        ) : isLifeWeatherOpen ? (
+          <SwipeBackView onBack={closeLifeWeather}>
+            <LifeWeatherScreen onBack={closeLifeWeather} data={appData} observation={weatherObservation} hourlyForecast={hourlyForecast} vehicle={appSettings.vehicleType} />
+          </SwipeBackView>
         ) : activeTab === 'weather' ? (
           <ScrollView showsVerticalScrollIndicator={false} contentInsetAdjustmentBehavior="never" contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 120 + insets.bottom, gap: 16 }}>
-            <WeatherCard data={appData} isFavorite={isFavorite} onToggleFavorite={toggleCurrentFavorite} onOpenAqi={openAqiDrawer} isDisasterVisualActive={isDisasterVisualActive} sceneInput={sceneInput} />
-            <LifeSuggestionsSection suggestions={lifeSuggestions} />
+            <WeatherCard data={appData} isFavorite={isFavorite} onToggleFavorite={toggleCurrentFavorite} onOpenAqi={openAqiDrawer} onOpenWeatherStat={openWeatherStat} isDisasterVisualActive={isDisasterVisualActive} sceneInput={sceneInput} labelTone={appSettings.statLabelTone} />
+            <LifeSuggestionsSection suggestions={lifeSuggestions} data={appData} onOpenLifeWeather={openLifeWeather} />
             <HourlyForecastSection forecast={hourlyForecast} />
             <WeeklyForecastSection forecast={weeklyForecast} period={weeklyTab} onChangePeriod={setWeeklyTab} />
             <AstroSection data={appData.astro} />
@@ -332,14 +380,14 @@ export function WeatherHomeScreen() {
           </Pressable>
         ) : null}
 
-        {isHumanDisasterOpen || isEarthquakeOpen || isTyphoonOpen ? null : <BottomNavigation activeTab={activeTab} onChange={setActiveTab} dark={dark} />}
+        {isHumanDisasterOpen || isEarthquakeOpen || isTyphoonOpen || isLifeWeatherOpen ? null : <BottomNavigation activeTab={activeTab} onChange={setActiveTab} dark={dark} />}
         <WebAlertToast
           alert={appData.alerts}
           visible={isWebAlertToastVisible}
           onClose={() => setIsWebAlertToastVisible(false)}
           onPress={() => { setIsWebAlertToastVisible(false); setIsAlarmModalOpen(true); }}
         />
-        <AqiDrawer open={isAqiDrawerOpen} data={appData} onClose={closeAqiDrawer} />
+        <AqiDrawer metric={drawerMetric} open={isAqiDrawerOpen} data={appData} onClose={closeAqiDrawer} />
         <FavoritesSidebar open={isSidebarOpen} data={appData} favorites={favoriteLocations} onClose={closeSidebar} onSelectLocation={selectLocation} onUseCurrentLocation={useCurrentLocation} onRemoveFavorite={removeFavorite} onSettings={showSettings} />
         <AlarmModal open={isAlarmModalOpen} alert={appData.alerts} onClose={closeAlarmModal} />
         {ENABLE_IWESR ? <SceneQualityModal open={isSceneQualityOpen} value={sceneQualityPreference} onChange={setSceneQualityPreference} onClose={() => setIsSceneQualityOpen(false)} /> : null}

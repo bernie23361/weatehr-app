@@ -1,2 +1,4 @@
 allowBuilds:
   dtrace-provider: false
+  esbuild: true
+  workerd: true

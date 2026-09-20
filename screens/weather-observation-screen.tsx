@@ -15,10 +15,11 @@ import { weatherApi, type Coordinates, type ObservationStation } from '@/service
 
 type ObservationLayer = 'radar' | 'temperature' | 'rainfall' | 'wind' | 'humidity' | 'visibility' | 'highways';
 
-const layerOrder: ObservationLayer[] = ['radar', 'temperature', 'rainfall', 'wind', 'humidity', 'visibility', 'highways'];
+// Highway weather is not included in the first release.
+const layerOrder: ObservationLayer[] = ['radar', 'temperature', 'rainfall', 'wind', 'humidity', 'visibility'];
 
-const HIGHWAY_FILL_COLOR = '#9CA3AF';
-const HIGHWAY_BORDER_COLOR = '#374151';
+const HIGHWAY_FILL_COLOR = '#94A3B8';
+const HIGHWAY_CASING_COLOR = '#FFFFFF';
 
 const temperatureGradientStops: ColorStop[] = TEMPERATURE_COLOR_STOPS
   .filter((stop, index, stops) => index === 0 || stop.color !== stops[index - 1].color)
@@ -472,49 +473,23 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
 {layer === 'highways' ? (
         <GeoJSONSource key="highways-source" id="highways-source" data={highwayGeoJson}>
           <Layer
-            id="national-highways-left-border"
+            id="national-highways-casing"
             type="line"
             filter={['==', ['get', 'type'], 'national']}
             paint={{
-              'line-color': HIGHWAY_BORDER_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 16, 6],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1.8, 16, -3.6],
-              'line-opacity': 0.96,
+              'line-color': HIGHWAY_CASING_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 4, 12, 8, 16, 12],
+              'line-opacity': 0.9,
             }}
             layout={{ 'line-cap': 'round', 'line-join': 'round' }}
           />
           <Layer
-            id="national-highways-left-fill"
+            id="national-highways-fill"
             type="line"
             filter={['==', ['get', 'type'], 'national']}
             paint={{
               'line-color': HIGHWAY_FILL_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 4],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, -1.8, 16, -3.6],
-              'line-opacity': 1,
-            }}
-            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-          />
-          <Layer
-            id="national-highways-right-border"
-            type="line"
-            filter={['==', ['get', 'type'], 'national']}
-            paint={{
-              'line-color': HIGHWAY_BORDER_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 16, 6],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 16, 3.6],
-              'line-opacity': 0.96,
-            }}
-            layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-          />
-          <Layer
-            id="national-highways-right-fill"
-            type="line"
-            filter={['==', ['get', 'type'], 'national']}
-            paint={{
-              'line-color': HIGHWAY_FILL_COLOR,
-              'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 16, 4],
-              'line-offset': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 16, 3.6],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.5, 12, 5, 16, 8],
               'line-opacity': 1,
             }}
             layout={{ 'line-cap': 'round', 'line-join': 'round' }}
@@ -655,7 +630,7 @@ export function WeatherObservationScreen({ bottomInset, anchor }: WeatherObserva
         {layer === 'highways' ? (
           <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.92)', borderWidth: 1, borderColor: '#EEF2F6' }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <View style={{ width: 16, height: 4, borderRadius: 999, backgroundColor: '#374151' }} />
+              <View style={{ width: 18, height: 8, borderRadius: 999, backgroundColor: HIGHWAY_FILL_COLOR, borderWidth: 2, borderColor: HIGHWAY_CASING_COLOR }} />
               <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '600' }}>國道</Text>
             </View>
           </View>

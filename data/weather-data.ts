@@ -37,9 +37,9 @@ export const initialAppData: AppData = {
   srdi: 'safe',
   astro: { sunrise: '06:12', sunset: '17:45', moonPhase: '盈凸月', moonrise: '18:30', moonset: '05:20' },
   alerts: {
-    hasActiveAlarm: true,
-    title: '颱風強風即時告警',
-    content: '[測試]受到強烈颱風影響，您所在地區「臺中市北區」即將出現12級平均風或14級陣風以上風力；請立即停止戶外活動並立即掩蔽。\n\n緊急應變措施：\n1. 立即停止戶外活動，盡速進入堅固建築物內躲避。\n2. 遠離招牌、樹木、圍牆及易倒塌的危險設施。\n3. 加強固定窗戶、門扇及易被強風吹落的物品（如陽台盆栽、廣告帆布）。\n4. 行車請減速慢行，避免行經橋樑、高架道路或強風路段。',
+    hasActiveAlarm: false,
+    title: '',
+    content: '',
   },
 };
 

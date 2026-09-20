@@ -47,5 +47,11 @@ yarn-error.*
 # generated temperature artifacts
 /artifacts/
 
+# generated map-tile pipeline cache (raw sources + tiles)
+/scripts/map-tiles/.cache/
+
 # local Worker source backups
 /cloudflare-worker/*.original-backup.mjs
+
+# wrangler local state
+/.wrangler/
