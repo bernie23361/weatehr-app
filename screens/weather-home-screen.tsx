@@ -102,7 +102,12 @@ export function WeatherHomeScreen() {
       if (requestId !== weatherRequestId.current) return false;
       setAppData((previous) => ({
         ...previous,
-        location: { ...previous.location, updateTime: current.updateTime },
+        location: {
+          ...previous.location,
+          // updateTime＝資料更新時間（bundle 產生時間）；observedTime＝測站觀測時間。
+          updateTime: current.updateTime,
+          ...(current.observedTime ? { observedTime: current.observedTime } : {}),
+        },
         weather: current.data,
       }));
       setWeatherObservation(current.observation);

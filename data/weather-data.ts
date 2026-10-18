@@ -31,7 +31,8 @@ export const archivedMotorcycleDefenseCard = {
 } as const;
 
 export const initialAppData: AppData = {
-  location: { city: '臺中市', district: '北區', updateTime: '11:30' },
+  // updateTime 留空：資料載入前不顯示虛構的更新時間，由 UI 顯示「資料時間暫缺」。
+  location: { city: '臺中市', district: '北區', updateTime: '' },
   weather: { temp: '22', status: '晴時多雲', feelsLike: '24°', humidity: '68%', windSpeed: '3 m/s' },
   aqi: { value: 35, status: '良好', pm25: 12, pm10: 25, o3: 30, no2: 10, stationName: '臺灣大道站' },
   srdi: 'safe',

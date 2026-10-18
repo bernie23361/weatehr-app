@@ -36,6 +36,9 @@ export function AqiDrawer({ open, data, onClose, metric }: { open: boolean; data
 
   const details = metric ? getWeatherStatDetails(metric, data) : undefined;
   const title = details ? `即時${details.title}` : '即時空氣品質';
+  // 面板顯示的是「觀測時間」：空品面板用該空品測站的觀測時間，
+  // 天氣統計面板則用天氣測站的觀測時間，兩者都不與資料更新時間混用。
+  const observedTime = details ? data.location.observedTime : data.aqi.observedTime;
   const color = details?.status.badgeText ?? aqiStatus.indicatorColor;
   const measurements = details?.measurements ?? [
     ['PM2.5 細懸浮微粒', data.aqi.pm25, 'μg/m³'],
@@ -77,7 +80,7 @@ export function AqiDrawer({ open, data, onClose, metric }: { open: boolean; data
             <Text style={{ color: '#64748B', fontSize: 14, lineHeight: 20, fontWeight: '500' }}>{details ? `${data.location.city}${data.location.district}` : stationName}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: '#E2E8F0' }}>
               <Animated.View style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: '#4ADE80', opacity: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }), transform: [{ scale: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.78, 1.18] }) }] }} />
-              <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '500' }}>{data.location.updateTime} 更新</Text>
+              <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '500' }}>{observedTime ? `觀測時間 ${observedTime}` : '資料時間暫缺'}</Text>
             </View>
           </View>
         </View>

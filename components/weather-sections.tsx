@@ -131,7 +131,7 @@ const statusOffset = (temperatureWidth - statusWidth) / 2;
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: '#E2E8F0' }}>
               <Animated.View style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: '#4ADE80', opacity: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }), transform: [{ scale: liveDotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.78, 1.18] }) }] }} />
-              <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '500' }}>{data.location.updateTime} 更新</Text>
+              <Text style={{ color: '#64748B', fontSize: 10, fontWeight: '500' }}>{data.location.updateTime ? `${data.location.updateTime} 更新` : '資料時間暫缺'}</Text>
             </View>
             <FavoriteButton isFavorite={isFavorite} onPress={onToggleFavorite} />
           </View>

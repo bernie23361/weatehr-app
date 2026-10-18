@@ -41,7 +41,7 @@ export interface ObservationStation {
 }
 
 export interface WeatherApiService {
-  getCurrentWeather: (coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>) => Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }>;
+  getCurrentWeather: (coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>) => Promise<{ data: AppData['weather']; updateTime: string; observedTime?: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }>;
   geocodeLocation: (location: TaiwanLocation) => Promise<Coordinates>;
   getAQI: (coordinates?: Coordinates) => Promise<Partial<AppData['aqi']> | undefined>;
   getSRDI: (coordinates?: Coordinates) => Promise<{ level: SrdiLevel } | undefined>;
@@ -78,6 +78,9 @@ interface CwaCurrentWeatherResponse {
     status?: string;
     icon?: string;
   }>;
+  // Worker 產生此 bundle 的時間（台灣時間，例如 2026-10-19T04:35:00+08:00），
+  // 代表資料更新時間，與 observation.observedAt（測站觀測時間）不同。
+  metadata?: { source?: string; updatedAt?: string; cacheTtlSeconds?: number; warnings?: string[] };
   error?: { code?: string; message?: string };
 }
 
@@ -112,6 +115,8 @@ interface MoenvAirQualityResponse {
     o3: number | null;
     no2: number | null;
   };
+  // 該空品測站的資料發布（觀測）時間；Worker 以 record.publishtime 回傳。
+  observedAt?: string | null;
   error?: { code?: string; message?: string };
 }
 
@@ -155,9 +160,25 @@ async function fetchJson<T>(url: string, timeoutMs = 12_000): Promise<T> {
   }
 }
 
-function formatUpdateTime(value?: string): string {
-  const match = value?.match(/T(\d{2}:\d{2})/);
-  return match?.[1] ?? new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+// 將後端時間統一換算為台灣時間（Asia/Taipei）的「HH:MM」。
+// - 帶時區標記的字串（例如 2026-10-19T04:35:00+08:00 或 ...Z）以實際時刻換算，
+//   顯示結果不受裝置時區影響。
+// - 不含時區的在地牆鐘字串（例如環境部的 2026-10-19 04:00）本身即為台灣時間，直接取時分。
+// 缺值或無法解析時回傳 undefined，絕不以裝置目前時間或固定值冒充資料時間。
+function formatTaipeiClockTime(value?: string | null): string | undefined {
+  const text = String(value ?? '').trim();
+  if (!text) return undefined;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(text)) {
+    const timestamp = Date.parse(text.includes('T') ? text : text.replace(' ', 'T'));
+    if (!Number.isFinite(timestamp)) return undefined;
+    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(timestamp);
+  }
+  const match = text.match(/(\d{1,2}):(\d{2})/);
+  if (!match) return undefined;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours > 23 || minutes > 59) return undefined;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 function resolveHourlyIcon(icon?: string, status?: string): Pick<HourlyForecast, 'icon' | 'iconColor'> {
@@ -235,7 +256,7 @@ function normalizeWeeklyForecast(items?: CwaWeeklyForecastResponse['weekly']): W
   });
 }
 
-async function getCurrentWeather(coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<{ data: AppData['weather']; updateTime: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }> {
+async function getCurrentWeather(coordinates: Coordinates, location: Pick<TaiwanLocation, 'city' | 'district'>): Promise<{ data: AppData['weather']; updateTime: string; observedTime?: string; observation: CurrentWeatherObservation; hourly?: HourlyForecast[] }> {
   const parameters = new URLSearchParams({
     city: location.city,
     district: location.district,
@@ -245,8 +266,13 @@ async function getCurrentWeather(coordinates: Coordinates, location: Pick<Taiwan
     throw new Error(response.error?.message ?? '中央氣象署即時天氣資料不完整');
   }
   const observation = response.observation;
+  // 更新時間取自 Worker 回報的 metadata.updatedAt（bundle 產生時間）；
+  // 觀測時間才是測站 observedAt。兩者刻意分開，避免把觀測時間當成更新時間。
+  const updateTime = formatTaipeiClockTime(response.metadata?.updatedAt);
+  const observedTime = formatTaipeiClockTime(observation.observedAt);
   return {
-    updateTime: formatUpdateTime(observation.observedAt),
+    updateTime: updateTime ?? '',
+    ...(observedTime ? { observedTime } : {}),
     data: response.current,
     hourly: normalizeHourlyForecast(response.hourly),
     observation: {
@@ -305,10 +331,12 @@ async function getAQI(coordinates?: Coordinates): Promise<Partial<AppData['aqi']
   const response = await fetchJson<MoenvAirQualityResponse>(`${WEATHER_WORKER_BASE_URL}/air-quality?${parameters}`);
   const airQuality = response.airQuality;
   if (!response.ok || !airQuality) throw new Error(response.error?.message ?? '環境部空氣品質資料不完整');
+  const observedTime = formatTaipeiClockTime(response.observedAt);
   return {
     value: airQuality.value,
     status: airQuality.status,
     ...(response.station?.name ? { stationName: response.station.name } : {}),
+    ...(observedTime ? { observedTime } : {}),
     ...(airQuality.pm25 == null ? {} : { pm25: airQuality.pm25 }),
     ...(airQuality.pm10 == null ? {} : { pm10: airQuality.pm10 }),
     ...(airQuality.o3 == null ? {} : { o3: airQuality.o3 }),

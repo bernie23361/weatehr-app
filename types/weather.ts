@@ -99,9 +99,12 @@ export type MakinWeatherIconName =
 export type AppWeatherIconName = WeatherIconName | MakinWeatherIconName;
 
 export interface AppData {
-  location: { city: string; district: string; updateTime: string };
+  // updateTime＝後端回報的資料更新時間（bundle 產生時間，台灣時間 HH:MM）。
+  // observedTime＝測站實際觀測時間（台灣時間 HH:MM），與更新時間分開，避免混用。
+  location: { city: string; district: string; updateTime: string; observedTime?: string };
   weather: { temp: string; status: string; feelsLike: string; humidity: string; windSpeed: string };
-  aqi: { value: number; status: string; pm25: number; pm10: number; o3: number; no2: number; stationName?: string };
+  // observedTime＝該空品測站本身的觀測時間（publishtime，台灣時間 HH:MM）。
+  aqi: { value: number; status: string; pm25: number; pm10: number; o3: number; no2: number; stationName?: string; observedTime?: string };
   srdi: SrdiLevel;
   astro: { sunrise: string; sunset: string; moonPhase: string; moonrise: string; moonset: string };
   alerts: { hasActiveAlarm: boolean; title: string; content: string };
