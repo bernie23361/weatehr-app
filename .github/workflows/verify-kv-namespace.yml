@@ -1,0 +1,62 @@
+name: Verify KV namespace secret (read-only)
+
+# 手動觸發的唯讀檢查：確認 GitHub Secret `WEATHER_KV_NAMESPACE_ID`
+# 是否與 wrangler.cwa.jsonc 中 `WEATHER_REALTIME_KV` binding 的 namespace ID 一致。
+#
+# 安全設計：
+# - 只讀取 repository 內容（解析 wrangler.cwa.jsonc），不寫入 Cloudflare。
+# - 不執行 KV put/delete、不部署 Worker、不修改任何 binding。
+# - 不啟用 shell trace（不得使用 set -x）。
+# - Secret 僅以環境變數傳入記憶體比較，不寫入檔案、artifact、cache 或 job output。
+# - 只輸出 PASS／FAIL，永不輸出 Secret 值或 Secret 本身。
+# - 注意：本流程只證明「Secret 值 == wrangler.cwa.jsonc 的 binding id」，
+#   不代表 Cloudflare 上 Worker 的實際 binding 一定相同（需另行唯讀核對）。
+on:
+  workflow_dispatch:
+
+# 僅需讀取 repository 以解析 wrangler.cwa.jsonc；不需要其他權限。
+permissions:
+  contents: read
+
+jobs:
+  verify-namespace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compare Secret with wrangler.cwa.jsonc binding
+        env:
+          ACTUAL_KV_NAMESPACE_ID: ${{ secrets.WEATHER_KV_NAMESPACE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTUAL_KV_NAMESPACE_ID:-}" ]; then
+            echo "NAMESPACE_SECRET_MATCH: FAIL (secret WEATHER_KV_NAMESPACE_ID is missing or empty)"
+            exit 1
+          fi
+          EXPECTED_KV_NAMESPACE_ID="$(node -e '
+          const fs = require("node:fs");
+          const raw = fs.readFileSync("wrangler.cwa.jsonc", "utf8").replace(/\r\n?/g, "\n");
+          const withoutComments = raw.split("\n").map((line) => line.replace(/^\s*\/\/.*$/, "")).join("\n");
+          const config = JSON.parse(withoutComments);
+          const entry = (config.kv_namespaces || []).find((item) => item.binding === "WEATHER_REALTIME_KV");
+          process.stdout.write(entry && entry.id ? entry.id : "");
+          ')"
+          if [ -z "$EXPECTED_KV_NAMESPACE_ID" ]; then
+            echo "NAMESPACE_SECRET_MATCH: FAIL (could not read WEATHER_REALTIME_KV binding id from wrangler.cwa.jsonc)"
+            exit 1
+          fi
+          if [ "$ACTUAL_KV_NAMESPACE_ID" = "$EXPECTED_KV_NAMESPACE_ID" ]; then
+            echo "NAMESPACE_SECRET_MATCH: PASS"
+          else
+            echo "NAMESPACE_SECRET_MATCH: FAIL (secret value differs from wrangler.cwa.jsonc binding)"
+            exit 1
+          fi
